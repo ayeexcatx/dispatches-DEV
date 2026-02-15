@@ -8,6 +8,280 @@
  * - adds a spreadsheet menu button people can click
  */
 
+const ENV = 'DEV';
+
+const DEV_SCHEMA_HEADERS = {
+  Dispatches: [
+    'dispatch_id',
+    'created_at',
+    'date',
+    'shift',
+    'client',
+    'job_number',
+    'start_time',
+    'start_location',
+    'instructions',
+    'truck_numbers',
+    'status',
+    'doc_id',
+    'doc_url',
+    'last_confirmed_at',
+    'is_confirmed'
+  ],
+  Trucks: [
+    'truckNumber',
+    'company',
+    'active',
+    'updatedAt',
+    'notes'
+  ],
+  Users: [
+    'userId',
+    'name',
+    'email',
+    'role',
+    'active',
+    'updatedAt'
+  ],
+  Confirmations: [
+    'dispatch_id',
+    'truck_number',
+    'confirmation_type',
+    'timestamp',
+    'confirmed_by'
+  ],
+  TimeEntries: [
+    'timeEntryId',
+    'dispatchId',
+    'truckNumber',
+    'userId',
+    'startTime',
+    'endTime',
+    'hours',
+    'createdAt',
+    'notes'
+  ]
+};
+
+/**
+ * Emit a log line with an environment prefix so DEV/PROD logs are easier to separate.
+ *
+ * @param {...*} args - Values to log.
+ */
+function log_(...args) {
+  Logger.log(`[${ENV}] ${args.map(value => String(value)).join(' ')}`);
+}
+
+/**
+ * Generate a unique dispatch identifier.
+ *
+ * @returns {string} UUID value for a new dispatch record.
+ */
+function newDispatchId_() {
+  return Utilities.getUuid();
+}
+
+/**
+ * Safely get a sheet by name from the active spreadsheet.
+ *
+ * @param {string} name - Exact tab name.
+ * @returns {GoogleAppsScript.Spreadsheet.Sheet} Matching sheet tab.
+ */
+function getSheet_(name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error(`[${ENV}] No active spreadsheet is available.`);
+  }
+
+  const sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    throw new Error(`[${ENV}] Required sheet tab "${name}" was not found.`);
+  }
+
+  return sheet;
+}
+
+/**
+ * Ensure all DEV schema tabs exist with header rows.
+ *
+ * Missing tabs are created and initialized with the corresponding header row.
+ */
+function ensureDevSchema_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    throw new Error(`[${ENV}] Cannot ensure schema because no active spreadsheet is available.`);
+  }
+
+  Object.keys(DEV_SCHEMA_HEADERS).forEach((sheetName) => {
+    const headers = DEV_SCHEMA_HEADERS[sheetName];
+    let sheet = ss.getSheetByName(sheetName);
+
+    if (!sheet) {
+      sheet = ss.insertSheet(sheetName);
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      log_(`Created sheet: ${sheetName}`);
+      return;
+    }
+
+    const headerRange = sheet.getRange(1, 1, 1, headers.length);
+    const existingHeaders = headerRange.getValues()[0];
+    const hasHeaderContent = existingHeaders.some(cell => String(cell).trim() !== '');
+
+    if (!hasHeaderContent) {
+      headerRange.setValues([headers]);
+      log_(`Initialized headers for existing sheet: ${sheetName}`);
+    }
+  });
+}
+
+/**
+ * Append one dispatch row to the Dispatches table.
+ *
+ * @param {Object} row - Dispatch row values.
+ */
+function appendDispatchIndexRow_(row) {
+  const sheet = getSheet_('Dispatches');
+  const values = [[
+    row.dispatchId,
+    row.createdAt,
+    row.date,
+    row.shift,
+    row.client,
+    row.jobNumber,
+    row.startTime,
+    row.startLocation,
+    row.instructions,
+    row.truckNumbers,
+    row.status,
+    row.docId,
+    row.docUrl,
+    row.lastConfirmedAt,
+    row.isConfirmed
+  ]];
+
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, values[0].length).setValues(values);
+  log_(`Dispatches row write success dispatch_id=${row.dispatchId} doc_id=${row.docId} row=${sheet.getLastRow()}`);
+}
+
+
+/**
+ * Build a header-name to column-index map from row 1.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Sheet to inspect.
+ * @returns {Object<string, number>} Header -> 0-based index map.
+ */
+function getHeaderIndexMap_(sheet) {
+  const lastColumn = Math.max(1, sheet.getLastColumn());
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
+  const map = {};
+
+  headers.forEach((header, index) => {
+    const key = String(header || '').trim();
+    if (key) map[key] = index;
+  });
+
+  return map;
+}
+
+/**
+ * Build lookup by doc_id for records in the Dispatches sheet.
+ *
+ * @returns {Object<string, {dispatchId:string,isConfirmed:boolean}>} Map keyed by doc_id.
+ */
+function getDispatchLookupByDocId_() {
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderIndexMap_(sheet);
+  const requiredHeaders = ['dispatch_id', 'doc_id', 'is_confirmed'];
+
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Dispatches tab is missing required header: ${name}`);
+    }
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return {};
+
+  const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  const lookup = {};
+
+  data.forEach((row) => {
+    const docId = String(row[headerMap.doc_id] || '').trim();
+    if (!docId) return;
+    lookup[docId] = {
+      dispatchId: String(row[headerMap.dispatch_id] || '').trim(),
+      isConfirmed: String(row[headerMap.is_confirmed] || '').toUpperCase() === 'TRUE' || row[headerMap.is_confirmed] === true
+    };
+  });
+
+  return lookup;
+}
+
+/**
+ * Update Dispatches row to mark a dispatch as confirmed.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @returns {number} 1-based sheet row that was updated.
+ */
+function markDispatchConfirmed_(dispatchId) {
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderIndexMap_(sheet);
+  const requiredHeaders = ['dispatch_id', 'last_confirmed_at', 'is_confirmed'];
+
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Dispatches tab is missing required header: ${name}`);
+    }
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
+  }
+
+  const dispatchIdColumn = headerMap.dispatch_id + 1;
+  const values = sheet.getRange(2, dispatchIdColumn, lastRow - 1, 1).getValues();
+  const idx = values.findIndex(row => String(row[0]) === dispatchId);
+
+  if (idx === -1) {
+    throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
+  }
+
+  const targetRow = idx + 2;
+  sheet.getRange(targetRow, headerMap.last_confirmed_at + 1).setValue(new Date());
+  sheet.getRange(targetRow, headerMap.is_confirmed + 1).setValue(true);
+  return targetRow;
+}
+
+/**
+ * Append a confirmation row and mark the dispatch as confirmed.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @param {string} truckNumber - Truck identity shown in portal.
+ * @returns {{status:string}} Result payload for client.
+ */
+function confirmDispatchReceipt(dispatchId, truckNumber) {
+  ensureDevSchema_();
+
+  const confirmationSheet = getSheet_('Confirmations');
+  const timestamp = new Date();
+  const activeUserEmail = Session.getActiveUser().getEmail();
+  const confirmedBy = activeUserEmail || 'unknown';
+
+  confirmationSheet.appendRow([
+    dispatchId,
+    truckNumber,
+    'Dispatch',
+    timestamp,
+    confirmedBy
+  ]);
+
+  const updatedRow = markDispatchConfirmed_(dispatchId);
+  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmations_row=${confirmationSheet.getLastRow()} dispatches_row=${updatedRow}`);
+
+  return { status: 'ok' };
+}
+
 /**
  * Looks through a Google Doc and makes a label bold when it finds that exact text.
  *
@@ -86,6 +360,9 @@ function onFormSubmit(e) {
   console.log("Raw Shift Time:", rawShiftTime);
   console.log("Raw Start Time:", rawStartTime);
   console.log("Raw Start Time 02:", startTime02Raw);
+
+  ensureDevSchema_();
+  const assignedTruckNumbers = truckNumbers.join(', ');
 
 truckNumbers.forEach(truckNumber => { // Run the full archive flow for each selected truck, one by one.
 
@@ -236,6 +513,25 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
 
     archiveDoc.saveAndClose(); // Save all archive changes to Drive.
     console.log(`Archive copy created successfully: ${newName}`);
+
+    const dispatchId = newDispatchId_();
+    appendDispatchIndexRow_({
+      dispatchId: dispatchId,
+      createdAt: new Date(),
+      date: date,
+      shift: shiftTime,
+      client: company,
+      jobNumber: jobNumber,
+      startTime: startTime,
+      startLocation: startLocation,
+      instructions: instructions,
+      truckNumbers: assignedTruckNumbers,
+      status: 'Dispatched',
+      docId: archiveCopy.getId(),
+      docUrl: archiveCopy.getUrl(),
+      lastConfirmedAt: '',
+      isConfirmed: false
+    });
   } catch (error) {
     console.error("Error creating archive copy:", error); // If archive creation fails, write the error to logs for troubleshooting.
   }
@@ -373,6 +669,9 @@ if (companyName) {
  * @param {string} companyName - The company name used to find folders and title the page.
  */
 function updateCompanyDispatchPage(companyName) {
+  ensureDevSchema_();
+  const dispatchLookupByDocId = getDispatchLookupByDocId_();
+
   const folderMap = {
     "CCG": ["DT02"],
     "RTM": ["RT03", "RT12"],
@@ -472,7 +771,14 @@ function updateCompanyDispatchPage(companyName) {
   }
 
   const label = `<span style="${labelStyle}">${labelContent}</span>${statusLabel}`;
-  const link = `<div class="dispatch-block"><a href="${url}">${label}</a></div>`;
+  const docId = d.file.getId();
+  const dispatchRecord = dispatchLookupByDocId[docId] || {};
+  const dispatchId = dispatchRecord.dispatchId || '';
+  const isConfirmed = dispatchRecord.isConfirmed === true;
+  const confirmButton = dispatchId
+    ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${truckNumber}" onclick="confirmReceipt(this)" ${isConfirmed ? 'disabled' : ''}>${isConfirmed ? 'Confirmed ✓' : 'Confirm Receipt'}</button>`
+    : `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`;
+  const link = `<div class="dispatch-block"><a href="${url}">${label}</a>${confirmButton}</div>`;
 
     const entry = { date: d.date, html: link };
 
@@ -542,6 +848,20 @@ function updateCompanyDispatchPage(companyName) {
       text-decoration: underline;
       font-weight: bold; /* Make dispatch links bold so they stand out. */
     }
+    .confirm-btn {
+      margin-left: 12px;
+      background-color: #1a73e8;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .confirm-btn[disabled] {
+      background-color: #8ab4f8;
+      cursor: not-allowed;
+    }
     .title-container {
       text-align: center;
       margin-bottom: 24px;
@@ -577,6 +897,28 @@ function updateCompanyDispatchPage(companyName) {
     <h2>Past</h2>
     ${pastHTML || '<p>No past dispatches.</p>'}
   </div>
+
+  <script>
+    function confirmReceipt(buttonEl) {
+      const dispatchId = buttonEl.getAttribute('data-dispatch-id');
+      const truckNumber = buttonEl.getAttribute('data-truck-number');
+      if (!dispatchId || !truckNumber) return;
+
+      buttonEl.disabled = true;
+      buttonEl.textContent = 'Confirming...';
+
+      google.script.run
+        .withSuccessHandler(function () {
+          buttonEl.textContent = 'Confirmed ✓';
+        })
+        .withFailureHandler(function (error) {
+          buttonEl.disabled = false;
+          buttonEl.textContent = 'Confirm Receipt';
+          alert('Confirmation failed: ' + (error && error.message ? error.message : error));
+        })
+        .confirmDispatchReceipt(dispatchId, truckNumber);
+    }
+  </script>
 </body>
 </html>`;
 
