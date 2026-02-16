@@ -689,6 +689,7 @@ if (companyName) {
 function updateCompanyDispatchPage(companyName) {
   ensureDevSchema_();
   const dispatchLookupByDocId = getDispatchLookupByDocId_();
+  Logger.log(`Dispatch lookup key count: ${Object.keys(dispatchLookupByDocId).length}`);
 
   const folderMap = {
     "CCG": ["DT02"],
@@ -791,8 +792,12 @@ function updateCompanyDispatchPage(companyName) {
   const label = `<span style="${labelStyle}">${labelContent}</span>${statusLabel}`;
   const docId = d.file.getId();
   const dispatchRecord = dispatchLookupByDocId[docId] || {};
-  const dispatchId = dispatchRecord.dispatchId || '';
-  const isConfirmed = dispatchRecord.isConfirmed === true;
+  const dispatchId = String(dispatchRecord.dispatchId || dispatchRecord.dispatch_id || '').trim();
+  const rawIsConfirmed = dispatchRecord.isConfirmed !== undefined
+    ? dispatchRecord.isConfirmed
+    : dispatchRecord.is_confirmed;
+  const isConfirmed = rawIsConfirmed === true
+    || (typeof rawIsConfirmed === 'string' && rawIsConfirmed.toLowerCase() === 'true');
   const showConfirmButton = !isConfirmed;
   const confirmButton = !dispatchId
     ? `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`
