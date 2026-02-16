@@ -793,17 +793,22 @@ function updateCompanyDispatchPage(companyName) {
   const docId = d.file.getId();
   const dispatchRecord = dispatchLookupByDocId[docId] || {};
   const dispatchId = String(dispatchRecord.dispatchId || dispatchRecord.dispatch_id || '').trim();
+  const rawStatus = String(dispatchRecord.status || '').trim();
+  const normalizedStatus = rawStatus.toLowerCase();
   const rawIsConfirmed = dispatchRecord.isConfirmed !== undefined
     ? dispatchRecord.isConfirmed
     : dispatchRecord.is_confirmed;
   const isConfirmed = rawIsConfirmed === true
     || (typeof rawIsConfirmed === 'string' && rawIsConfirmed.toLowerCase() === 'true');
-  const showConfirmButton = !isConfirmed;
+  // Keep confirm controls visible for unconfirmed dispatches, including amended/canceled items.
+  // Only treat truly finalized statuses (for example Completed) as non-confirmable.
+  const isFinalizedStatus = normalizedStatus === 'completed';
+  const showConfirmButton = !isConfirmed && !isFinalizedStatus;
   const confirmButton = !dispatchId
     ? `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`
     : showConfirmButton
       ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${truckNumber}" onclick="confirmReceipt(this)">Confirm Receipt</button>`
-      : `<button class="confirm-btn" disabled>Confirmed ✓</button>`;
+      : `<button class="confirm-btn" disabled>${isConfirmed ? 'Confirmed ✓' : 'Finalized'}</button>`;
   const link = `<div class="dispatch-block"><a href="${url}">${label}</a>${confirmButton}</div>`;
 
     const entry = { date: d.date, html: link };
