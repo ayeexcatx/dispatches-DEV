@@ -221,12 +221,12 @@ function getDispatchLookupByDocId_() {
  * Update Dispatches row to mark a dispatch as confirmed.
  *
  * @param {string} dispatchId - Dispatch UUID.
- * @returns {number} 1-based sheet row that was updated.
+ * @returns {{rowNumber:number,status:string}} Updated row metadata.
  */
 function markDispatchConfirmed_(dispatchId) {
   const sheet = getSheet_('Dispatches');
   const headerMap = getHeaderIndexMap_(sheet);
-  const requiredHeaders = ['dispatch_id', 'last_confirmed_at', 'is_confirmed'];
+  const requiredHeaders = ['dispatch_id', 'status', 'last_confirmed_at', 'is_confirmed'];
 
   requiredHeaders.forEach((name) => {
     if (headerMap[name] === undefined) {
@@ -248,9 +248,25 @@ function markDispatchConfirmed_(dispatchId) {
   }
 
   const targetRow = idx + 2;
+  const currentStatus = String(sheet.getRange(targetRow, headerMap.status + 1).getValue() || '').trim();
   sheet.getRange(targetRow, headerMap.last_confirmed_at + 1).setValue(new Date());
   sheet.getRange(targetRow, headerMap.is_confirmed + 1).setValue(true);
-  return targetRow;
+  return {
+    rowNumber: targetRow,
+    status: currentStatus
+  };
+}
+
+/**
+ * Convert a dispatch status into the confirmation type written to Confirmations.
+ *
+ * @param {string} status - Current dispatch status from Dispatches tab.
+ * @returns {string} Confirmation type for Confirmations tab.
+ */
+function getConfirmationTypeForStatus_(status) {
+  if (status === 'Amended') return 'Amendment';
+  if (status === 'Canceled') return 'Cancellation';
+  return 'Dispatch';
 }
 
 /**
@@ -268,16 +284,18 @@ function confirmDispatchReceipt(dispatchId, truckNumber) {
   const activeUserEmail = Session.getActiveUser().getEmail();
   const confirmedBy = activeUserEmail || 'unknown';
 
+  const dispatchUpdate = markDispatchConfirmed_(dispatchId);
+  const confirmationType = getConfirmationTypeForStatus_(dispatchUpdate.status);
+
   confirmationSheet.appendRow([
     dispatchId,
     truckNumber,
-    'Dispatch',
+    confirmationType,
     timestamp,
     confirmedBy
   ]);
 
-  const updatedRow = markDispatchConfirmed_(dispatchId);
-  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmations_row=${confirmationSheet.getLastRow()} dispatches_row=${updatedRow}`);
+  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmation_type=${confirmationType} confirmations_row=${confirmationSheet.getLastRow()} dispatches_row=${dispatchUpdate.rowNumber}`);
 
   return { status: 'ok' };
 }
@@ -775,9 +793,12 @@ function updateCompanyDispatchPage(companyName) {
   const dispatchRecord = dispatchLookupByDocId[docId] || {};
   const dispatchId = dispatchRecord.dispatchId || '';
   const isConfirmed = dispatchRecord.isConfirmed === true;
-  const confirmButton = dispatchId
-    ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${truckNumber}" onclick="confirmReceipt(this)" ${isConfirmed ? 'disabled' : ''}>${isConfirmed ? 'Confirmed ✓' : 'Confirm Receipt'}</button>`
-    : `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`;
+  const showConfirmButton = !isConfirmed;
+  const confirmButton = !dispatchId
+    ? `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`
+    : showConfirmButton
+      ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${truckNumber}" onclick="confirmReceipt(this)">Confirm Receipt</button>`
+      : `<button class="confirm-btn" disabled>Confirmed ✓</button>`;
   const link = `<div class="dispatch-block"><a href="${url}">${label}</a>${confirmButton}</div>`;
 
     const entry = { date: d.date, html: link };
@@ -904,6 +925,7 @@ function updateCompanyDispatchPage(companyName) {
       const truckNumber = buttonEl.getAttribute('data-truck-number');
       if (!dispatchId || !truckNumber) return;
 
+      const originalLabel = buttonEl.textContent;
       buttonEl.disabled = true;
       buttonEl.textContent = 'Confirming...';
 
@@ -913,7 +935,7 @@ function updateCompanyDispatchPage(companyName) {
         })
         .withFailureHandler(function (error) {
           buttonEl.disabled = false;
-          buttonEl.textContent = 'Confirm Receipt';
+          buttonEl.textContent = originalLabel || 'Confirm Receipt';
           alert('Confirmation failed: ' + (error && error.message ? error.message : error));
         })
         .confirmDispatchReceipt(dispatchId, truckNumber);
