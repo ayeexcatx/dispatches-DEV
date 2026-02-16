@@ -881,17 +881,21 @@ function updateCompanyDispatchPage(companyName) {
     }
     .confirm-btn {
       margin-left: 12px;
+      vertical-align: middle;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
       background-color: #1a73e8;
       color: #fff;
-      border: none;
-      border-radius: 6px;
-      padding: 6px 10px;
-      cursor: pointer;
-      font-weight: 600;
     }
-    .confirm-btn[disabled] {
-      background-color: #8ab4f8;
-      cursor: not-allowed;
+    .confirm-btn.confirmed,
+    .confirm-btn:disabled {
+      background-color: #d9ead3;
+      color: #2e7d32;
+      cursor: default;
     }
     .title-container {
       text-align: center;
