@@ -12,39 +12,77 @@ const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
  */
 function doGet(e) {
   const token = String((e && e.parameter && e.parameter.t) || '').trim();
-  if (!token) {
-    return renderErrorPage_('Missing token. Please use your dispatch portal link.');
-  }
+  const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
+  const isDev = isDevEnvironment_();
+  const user = token ? getActivePortalUserByToken_(token) : null;
+  const shouldUseCompanyFallback = isDev && companyParam && (!token || !user);
 
-  const user = getActivePortalUserByToken_(token);
-  if (!user) {
-    return renderErrorPage_('Invalid or inactive token. Please contact dispatch admin.');
+  if (!shouldUseCompanyFallback) {
+    if (!token) {
+      return renderErrorPage_('Missing token. Please use your dispatch portal link.');
+    }
+
+    if (!user) {
+      return renderErrorPage_('Invalid or inactive token. Please contact dispatch admin.');
+    }
   }
 
   let content = '';
   let pageTitle = 'Dispatch List';
 
-  if (user.truckNumber) {
+  if (!shouldUseCompanyFallback && user.truckNumber) {
     content = buildTruckScopedPortalHtml_(user.truckNumber);
     pageTitle = `${user.truckNumber} Dispatch List`;
-  } else if (user.company) {
-    const companyFileName = `${user.company}_dispatch_list.html`;
+  } else {
+    const resolvedCompany = shouldUseCompanyFallback ? companyParam : user.company;
+    if (!resolvedCompany) {
+      return renderErrorPage_('Token is missing truck/company scope. Please contact dispatch admin.');
+    }
+
+    const companyFileName = `${resolvedCompany}_dispatch_list.html`;
     const archivesFolder = DriveApp.getFolderById(DISPATCH_ARCHIVES_FOLDER_ID);
     const file = findFileRecursively(archivesFolder, companyFileName);
 
     if (!file) {
-      return renderErrorPage_(`No dispatch list found for company: ${user.company}.`);
+      return renderErrorPage_(`No dispatch list found for company: ${resolvedCompany}.`);
     }
 
     content = file.getBlob().getDataAsString();
-    pageTitle = `${user.company} Dispatch List`;
-  } else {
-    return renderErrorPage_('Token is missing truck/company scope. Please contact dispatch admin.');
+    if (shouldUseCompanyFallback) {
+      content = addDevFallbackBanner_(content);
+    }
+    pageTitle = `${resolvedCompany} Dispatch List`;
   }
 
   return HtmlService.createHtmlOutput(content)
     .setTitle(pageTitle)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Determine whether this script is running in DEV.
+ *
+ * @returns {boolean} True when ENV is set to DEV.
+ */
+function isDevEnvironment_() {
+  return typeof ENV !== 'undefined' && String(ENV).toUpperCase() === 'DEV';
+}
+
+/**
+ * Prepend a visible DEV banner when company fallback mode is used.
+ *
+ * @param {string} html - Existing page HTML.
+ * @returns {string} HTML with a fallback banner inserted.
+ */
+function addDevFallbackBanner_(html) {
+  const banner = '<div style="position:sticky;top:0;z-index:9999;background:#fff3cd;color:#856404;border:1px solid #ffeeba;padding:12px 16px;font-weight:bold;text-align:center;">DEV FALLBACK MODE (company param)</div>';
+  const rawHtml = String(html || '');
+
+  if (/<body[^>]*>/i.test(rawHtml)) {
+    return rawHtml.replace(/<body([^>]*)>/i, `<body$1>${banner}`);
+  }
+
+  return `${banner}${rawHtml}`;
 }
 
 /**
@@ -54,7 +92,7 @@ function doGet(e) {
  * @returns {{userId:string,displayName:string,role:string,company:string,truckNumber:string}|null}
  */
 function getActivePortalUserByToken_(token) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID);
   const usersSheet = ss.getSheetByName('Users');
   if (!usersSheet || usersSheet.getLastRow() < 2) return null;
 
@@ -97,7 +135,7 @@ function getActivePortalUserByToken_(token) {
  * @returns {string} Filtered portal HTML.
  */
 function buildTruckScopedPortalHtml_(truckNumber) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Dispatches');
+  const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
   if (!sheet || sheet.getLastRow() < 2) {
     return renderNoDispatchesHtml_(truckNumber);
   }
