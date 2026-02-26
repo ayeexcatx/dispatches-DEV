@@ -1071,3 +1071,48 @@ function createUserToken_(truckNumber, company) {
 
   return { user_id: userId, token };
 }
+
+function runCreateDevToken() {
+  // CHANGE THESE TWO to something real you want
+  const res = createUserToken_('DT02', 'CCG'); 
+  Logger.log('TOKEN: ' + JSON.stringify(res));
+}
+
+function runRepairDevSchema() {
+  ensureDevSchema_({ forceHeaders: true });
+}
+
+function repairUsersHeader_DEV_() {
+  const EXPECTED = ['user_id', 'display_name', 'role', 'company', 'truck_number', 'token', 'is_active'];
+
+  // This targets the spreadsheet the script is bound to (the one you opened via Extensions → Apps Script)
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName('Users') || ss.insertSheet('Users');
+
+  const lastCol = Math.max(sheet.getLastColumn(), EXPECTED.length);
+  const current = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
+
+  // If already correct, stop
+  const hasAll = EXPECTED.every(h => current.includes(h));
+  if (hasAll && current.slice(0, EXPECTED.length).join('|') === EXPECTED.join('|')) {
+    Logger.log('Users headers already correct.');
+    return;
+  }
+
+  // Snapshot old header row for safety
+  Logger.log('Old Users headers: ' + JSON.stringify(current));
+
+  // Overwrite header row (row 1) with expected headers
+  sheet.getRange(1, 1, 1, EXPECTED.length).setValues([EXPECTED]);
+
+  // Optional: clear any extra header cells to the right so headerMap can't pick up junk
+  if (lastCol > EXPECTED.length) {
+    sheet.getRange(1, EXPECTED.length + 1, 1, lastCol - EXPECTED.length).clearContent();
+  }
+
+  Logger.log('Users headers repaired to: ' + JSON.stringify(EXPECTED));
+}
+
+function runRepairUsersHeader() {
+  repairUsersHeader_DEV_();
+}
