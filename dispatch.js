@@ -36,12 +36,13 @@ const DEV_SCHEMA_HEADERS = {
     'notes'
   ],
   Users: [
-    'userId',
-    'name',
-    'email',
+    'user_id',
+    'display_name',
     'role',
-    'active',
-    'updatedAt'
+    'company',
+    'truck_number',
+    'token',
+    'is_active'
   ],
   Confirmations: [
     'dispatch_id',
@@ -998,4 +999,75 @@ function updateAllCompanyPages() {
   for (const company of companies) {
     updateCompanyDispatchPage(company);
   }
+}
+
+/**
+ * Create or rotate a portal token for a truck/company user row.
+ *
+ * This helper is admin-only and stores a UUID in Users.token.
+ *
+ * @param {string} truckNumber - Truck number for the user record.
+ * @param {string} company - Company code for the user record.
+ * @returns {{user_id:string, token:string}} Token payload for sharing.
+ */
+function createUserToken_(truckNumber, company) {
+  const activeEmail = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
+  const ownerEmail = String(SpreadsheetApp.getActiveSpreadsheet().getOwner().getEmail() || '').trim().toLowerCase();
+
+  if (!activeEmail || activeEmail !== ownerEmail) {
+    throw new Error(`[${ENV}] Only spreadsheet admins may create user tokens.`);
+  }
+
+  ensureDevSchema_();
+
+  const sheet = getSheet_('Users');
+  const headerMap = getHeaderIndexMap_(sheet);
+  const requiredHeaders = ['user_id', 'display_name', 'role', 'company', 'truck_number', 'token', 'is_active'];
+
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Users tab is missing required header: ${name}`);
+    }
+  });
+
+  const normalizedTruck = String(truckNumber || '').trim();
+  const normalizedCompany = String(company || '').trim();
+  if (!normalizedTruck && !normalizedCompany) {
+    throw new Error(`[${ENV}] Provide truckNumber and/or company when creating a user token.`);
+  }
+
+  const token = Utilities.getUuid();
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow >= 2) {
+    const data = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+    const rowIndex = data.findIndex((row) => {
+      const rowTruck = String(row[headerMap.truck_number] || '').trim();
+      const rowCompany = String(row[headerMap.company] || '').trim();
+      return rowTruck === normalizedTruck && rowCompany === normalizedCompany;
+    });
+
+    if (rowIndex !== -1) {
+      const targetRow = rowIndex + 2;
+      sheet.getRange(targetRow, headerMap.token + 1).setValue(token);
+      sheet.getRange(targetRow, headerMap.is_active + 1).setValue(true);
+      const userId = String(sheet.getRange(targetRow, headerMap.user_id + 1).getValue() || '').trim() || Utilities.getUuid();
+      if (!String(sheet.getRange(targetRow, headerMap.user_id + 1).getValue() || '').trim()) {
+        sheet.getRange(targetRow, headerMap.user_id + 1).setValue(userId);
+      }
+      return { user_id: userId, token };
+    }
+  }
+
+  const row = new Array(sheet.getLastColumn()).fill('');
+  const userId = Utilities.getUuid();
+  row[headerMap.user_id] = userId;
+  row[headerMap.role] = 'driver';
+  row[headerMap.company] = normalizedCompany;
+  row[headerMap.truck_number] = normalizedTruck;
+  row[headerMap.token] = token;
+  row[headerMap.is_active] = true;
+  sheet.appendRow(row);
+
+  return { user_id: userId, token };
 }
