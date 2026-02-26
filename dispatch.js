@@ -9,6 +9,7 @@
  */
 
 const ENV = 'DEV';
+const DEV_DB_SPREADSHEET_ID = '1BRkmpO0PoYyDVfK5zskSN9UZjAV9cJpcUd76xXLQHss';
 
 const DEV_SCHEMA_HEADERS = {
   Dispatches: [
@@ -61,6 +62,14 @@ const DEV_SCHEMA_HEADERS = {
     'hours',
     'createdAt',
     'notes'
+  ],
+  AmendmentHistory: [
+    'dispatch_id',
+    'amended_at',
+    'amended_by',
+    'change_summary',
+    'previous_doc_id',
+    'new_doc_id'
   ]
 };
 
@@ -89,7 +98,7 @@ function newDispatchId_() {
  * @returns {GoogleAppsScript.Spreadsheet.Sheet} Matching sheet tab.
  */
 function getSheet_(name) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID);
   if (!ss) {
     throw new Error(`[${ENV}] No active spreadsheet is available.`);
   }
@@ -106,33 +115,56 @@ function getSheet_(name) {
  * Ensure all DEV schema tabs exist with header rows.
  *
  * Missing tabs are created and initialized with the corresponding header row.
+ * Existing tabs are validated against expected headers and can be force-overwritten.
+ *
+ * @param {{forceHeaders?: boolean}=} opts - Optional schema repair controls.
  */
-function ensureDevSchema_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+function ensureDevSchema_(opts) {
+  const ss = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID);
   if (!ss) {
     throw new Error(`[${ENV}] Cannot ensure schema because no active spreadsheet is available.`);
   }
 
+  const options = opts || {};
+  const forceHeaders = options.forceHeaders === true;
+  const updatedSheets = [];
+
   Object.keys(DEV_SCHEMA_HEADERS).forEach((sheetName) => {
-    const headers = DEV_SCHEMA_HEADERS[sheetName];
+    const expectedHeaders = DEV_SCHEMA_HEADERS[sheetName];
     let sheet = ss.getSheetByName(sheetName);
 
     if (!sheet) {
       sheet = ss.insertSheet(sheetName);
-      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-      log_(`Created sheet: ${sheetName}`);
+      sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+      updatedSheets.push(sheetName);
+      log_(`Created sheet with headers: ${sheetName}`);
       return;
     }
 
-    const headerRange = sheet.getRange(1, 1, 1, headers.length);
-    const existingHeaders = headerRange.getValues()[0];
-    const hasHeaderContent = existingHeaders.some(cell => String(cell).trim() !== '');
+    const rowWidth = Math.max(sheet.getLastColumn(), expectedHeaders.length);
+    const allRowHeaders = sheet.getRange(1, 1, 1, rowWidth).getValues()[0]
+      .map(value => String(value || '').trim());
+    const existingHeaders = allRowHeaders.slice(0, expectedHeaders.length);
+    const normalizedExpected = expectedHeaders.map(value => String(value || '').trim());
 
-    if (!hasHeaderContent) {
-      headerRange.setValues([headers]);
-      log_(`Initialized headers for existing sheet: ${sheetName}`);
+    const hasMissingRequiredHeaders = normalizedExpected.some(header => existingHeaders.indexOf(header) === -1);
+    const headersMatchExactly = normalizedExpected.every((header, idx) => existingHeaders[idx] === header);
+    const hasUnexpectedExtraHeaders = allRowHeaders.slice(expectedHeaders.length).some(header => header !== '');
+    const shouldOverwriteHeaders = forceHeaders || hasMissingRequiredHeaders || !headersMatchExactly || hasUnexpectedExtraHeaders;
+
+    if (shouldOverwriteHeaders) {
+      sheet.getRange(1, 1, 1, rowWidth).clearContent();
+      sheet.getRange(1, 1, 1, expectedHeaders.length).setValues([expectedHeaders]);
+      updatedSheets.push(sheetName);
+      log_(`Updated headers for sheet: ${sheetName}`);
     }
   });
+
+  if (updatedSheets.length) {
+    log_(`Schema header updates applied to: ${updatedSheets.join(', ')}`);
+  } else {
+    log_('Schema headers already match expected values.');
+  }
 }
 
 /**
@@ -1012,7 +1044,7 @@ function updateAllCompanyPages() {
  */
 function createUserToken_(truckNumber, company) {
   const activeEmail = String(Session.getActiveUser().getEmail() || '').trim().toLowerCase();
-  const ownerEmail = String(SpreadsheetApp.getActiveSpreadsheet().getOwner().getEmail() || '').trim().toLowerCase();
+  const ownerEmail = String(SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getOwner().getEmail() || '').trim().toLowerCase();
 
   if (!activeEmail || activeEmail !== ownerEmail) {
     throw new Error(`[${ENV}] Only spreadsheet admins may create user tokens.`);
@@ -1086,7 +1118,7 @@ function repairUsersHeader_DEV_() {
   const EXPECTED = ['user_id', 'display_name', 'role', 'company', 'truck_number', 'token', 'is_active'];
 
   // This targets the spreadsheet the script is bound to (the one you opened via Extensions → Apps Script)
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID);
   const sheet = ss.getSheetByName('Users') || ss.insertSheet('Users');
 
   const lastCol = Math.max(sheet.getLastColumn(), EXPECTED.length);
