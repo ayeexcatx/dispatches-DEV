@@ -11,60 +11,65 @@ const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
  * Expected URL format: ?t=TOKEN
  */
 function doGet(e) {
-  const token = String((e && e.parameter && e.parameter.t) || '').trim();
-  const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
-  const isDev = isDevEnvironment_();
-  const user = token ? getActivePortalUserByToken_(token) : null;
-  const shouldUseCompanyFallback = isDev && companyParam && (!token || !user);
+  try {
+    const token = String((e && e.parameter && e.parameter.t) || '').trim();
+    const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
+    const isDev = isDevEnvironment_();
+    const user = token ? getActivePortalUserByToken_(token) : null;
+    const shouldUseCompanyFallback = isDev && companyParam && (!token || !user);
 
-  if (!shouldUseCompanyFallback) {
-    if (!token) {
-      return renderErrorPage_('Missing token. Please use your dispatch portal link.');
+    if (!shouldUseCompanyFallback) {
+      if (!token) {
+        return renderErrorPage_('Invalid or missing token. Please use your dispatch portal link.');
+      }
+
+      if (!user) {
+        return renderErrorPage_('Invalid or missing token. Please contact dispatch admin.');
+      }
     }
 
-    if (!user) {
-      return renderErrorPage_('Invalid or inactive token. Please contact dispatch admin.');
+    let content = '';
+    let pageTitle = 'Dispatch List';
+
+    if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
+      content = buildAdminDashboardHtml_(user, token, e && e.parameter);
+      pageTitle = 'Admin Dispatch Dashboard';
+      return HtmlService.createHtmlOutput(content)
+        .setTitle(pageTitle)
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
     }
-  }
 
-  let content = '';
-  let pageTitle = 'Dispatch List';
+    if (!shouldUseCompanyFallback && user.truckNumber) {
+      content = buildTruckScopedPortalHtml_(user.truckNumber);
+      pageTitle = `${user.truckNumber} Dispatch List`;
+    } else {
+      const resolvedCompany = shouldUseCompanyFallback ? companyParam : user.company;
+      if (!resolvedCompany) {
+        return renderErrorPage_('Token is missing truck/company scope. Please contact dispatch admin.');
+      }
 
-  if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
-    content = buildAdminDashboardHtml_(user, token, e && e.parameter);
-    pageTitle = 'Admin Dispatch Dashboard';
+      const companyFileName = `${resolvedCompany}_dispatch_list.html`;
+      const archivesFolder = DriveApp.getFolderById(DISPATCH_ARCHIVES_FOLDER_ID);
+      const file = findFileRecursively(archivesFolder, companyFileName);
+
+      if (!file) {
+        return renderErrorPage_(`No dispatch list found for company: ${resolvedCompany}.`);
+      }
+
+      content = file.getBlob().getDataAsString();
+      if (shouldUseCompanyFallback) {
+        content = addDevFallbackBanner_(content);
+      }
+      pageTitle = `${resolvedCompany} Dispatch List`;
+    }
+
     return HtmlService.createHtmlOutput(content)
       .setTitle(pageTitle)
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (error) {
+    const message = (error && error.message) ? error.message : String(error || 'Unknown error');
+    return renderErrorPage_(`Unable to render page. ${message}`);
   }
-
-  if (!shouldUseCompanyFallback && user.truckNumber) {
-    content = buildTruckScopedPortalHtml_(user.truckNumber);
-    pageTitle = `${user.truckNumber} Dispatch List`;
-  } else {
-    const resolvedCompany = shouldUseCompanyFallback ? companyParam : user.company;
-    if (!resolvedCompany) {
-      return renderErrorPage_('Token is missing truck/company scope. Please contact dispatch admin.');
-    }
-
-    const companyFileName = `${resolvedCompany}_dispatch_list.html`;
-    const archivesFolder = DriveApp.getFolderById(DISPATCH_ARCHIVES_FOLDER_ID);
-    const file = findFileRecursively(archivesFolder, companyFileName);
-
-    if (!file) {
-      return renderErrorPage_(`No dispatch list found for company: ${resolvedCompany}.`);
-    }
-
-    content = file.getBlob().getDataAsString();
-    if (shouldUseCompanyFallback) {
-      content = addDevFallbackBanner_(content);
-    }
-    pageTitle = `${resolvedCompany} Dispatch List`;
-  }
-
-  return HtmlService.createHtmlOutput(content)
-    .setTitle(pageTitle)
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 /**
@@ -86,36 +91,42 @@ function isAdminOrDispatcherUser_(user) {
  */
 function buildAdminDashboardHtml_(user, token, params) {
   const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
-  const statusParam = String((params && params.s) || '').trim().toLowerCase();
-  const messageParam = decodeURIComponent(String((params && params.m) || '').trim());
+  const messageParam = String((params && params.msg) || '').trim().toLowerCase();
+  const rawErrorParam = String((params && params.err) || '').trim();
+  const errorParam = rawErrorParam ? decodeURIComponent(rawErrorParam) : '';
   const pageParamRaw = String((params && params.p) || '').trim().toLowerCase();
-  const page = pageParamRaw || 'dashboard';
+  const pageAliases = {
+    'create-dispatch': 'create',
+    'companies-trucks': 'companies'
+  };
+  const page = pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
 
   const notices = {
-    complete_ok: { kind: 'success', text: 'Dispatch marked completed.' },
+    completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
-    create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
-    action_failed: { kind: 'error', text: 'Action failed. Please try again.' },
-    unauthorized: { kind: 'error', text: 'You are not authorized to perform this action.' }
+    create_ok: { kind: 'success', text: 'Dispatch created successfully.' }
   };
-  const notice = notices[statusParam] || null;
+  const notice = notices[messageParam] || null;
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
-    { id: 'create-dispatch', label: 'Create Dispatch' },
-    { id: 'companies-trucks', label: 'Companies/Trucks' },
+    { id: 'create', label: 'Create Dispatch' },
+    { id: 'companies', label: 'Companies/Trucks' },
     { id: 'users', label: 'Users' }
   ];
 
   const navHtml = navItems.map((item) => {
     const activeClass = item.id === page ? 'active' : '';
-    return `<a class="tab ${activeClass}" href="#" onclick="navigateToPage('${item.id}'); return false;">${item.label}</a>`;
+    const paramsForLink = ['t=' + encodeURIComponent(token || '')];
+    if (item.id !== 'dashboard') paramsForLink.push('p=' + encodeURIComponent(item.id));
+    const href = '?' + paramsForLink.join('&');
+    return `<a class="tab ${activeClass}" href="${href}">${item.label}</a>`;
   }).join('\n');
 
   let pageContent = '';
 
-  if (page === 'create-dispatch') {
+  if (page === 'create') {
     pageContent = `
       <h2>Create Dispatch</h2>
       <form id="createDispatchForm" class="card" onsubmit="submitCreateDispatch(event)">
@@ -148,8 +159,8 @@ function buildAdminDashboardHtml_(user, token, params) {
         </div>
       </form>
     `;
-  } else if (page === 'companies-trucks' || page === 'users') {
-    const title = page === 'companies-trucks' ? 'Companies/Trucks' : 'Users';
+  } else if (page === 'companies' || page === 'users') {
+    const title = page === 'companies' ? 'Companies/Trucks' : 'Users';
     pageContent = `<h2>${title}</h2><div class="card"><p>Coming soon.</p></div>`;
   } else {
     if (!sheet || sheet.getLastRow() < 2) {
@@ -169,6 +180,9 @@ function buildAdminDashboardHtml_(user, token, params) {
       const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
       const activeRows = rows.filter(row => String(row[headerMap.status] || '').trim() !== 'Completed');
 
+      const isValidDocUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
+      const isValidDocId = (value) => /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
+
       const tableRows = activeRows.map((row) => {
         const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
         const dateValue = row[headerMap.date];
@@ -182,8 +196,10 @@ function buildAdminDashboardHtml_(user, token, params) {
         const status = String(row[headerMap.status] || '').trim();
         const docUrl = headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '';
         const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
+        const hasLinkedDoc = isValidDocUrl(docUrl) || isValidDocId(docId);
+        const viewButtonLabel = hasLinkedDoc ? 'View Dispatch' : 'No doc linked';
 
-        return `<tr>
+        return `<tr data-dispatch-id="${encodeURIComponent(dispatchId)}" data-doc-url="${encodeURIComponent(docUrl)}" data-doc-id="${encodeURIComponent(docId)}">
           <td>${dateText}</td>
           <td>${truckNumbers}</td>
           <td>${client}</td>
@@ -191,7 +207,7 @@ function buildAdminDashboardHtml_(user, token, params) {
           <td>${startTime}</td>
           <td>${status}</td>
           <td class="actions">
-            <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${dispatchId ? '' : 'disabled'}>View Dispatch</button>
+            <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${(dispatchId && hasLinkedDoc) ? '' : 'disabled'}>${viewButtonLabel}</button>
             <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
             <button onclick="amendDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
             <button onclick="cancelDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
@@ -233,7 +249,8 @@ function buildAdminDashboardHtml_(user, token, params) {
     th, td { border: 1px solid #d9d9d9; padding: 10px; text-align: left; vertical-align: top; }
     th { background: #eef3ff; }
     .actions button { margin-right: 8px; margin-bottom: 4px; }
-    .banner { margin: 12px 0 16px; padding: 10px 12px; border-radius: 4px; font-weight: 600; }
+    .banner { margin: 12px 0 16px; padding: 10px 12px; border-radius: 4px; font-weight: 600; display: none; }
+    .banner.show { display: block; }
     .banner.success { background: #e6f4ea; color: #137333; border: 1px solid #b7dfbf; }
     .banner.error { background: #fce8e6; color: #a50e0e; border: 1px solid #f6c7c3; }
     .tabs { display: flex; gap: 8px; margin: 8px 0 16px; }
@@ -247,30 +264,41 @@ function buildAdminDashboardHtml_(user, token, params) {
 </head>
 <body>
   <h1>Admin Dispatch Dashboard</h1>
-  ${notice ? `<div class="banner ${notice.kind}">${notice.text}</div>` : ''}
-  ${messageParam ? `<div class="banner error">${messageParam}</div>` : ''}
+  <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
   ${pageContent}
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
+    const INITIAL_NOTICE = ${JSON.stringify(notice)};
+    const INITIAL_ERROR = ${JSON.stringify(errorParam)};
 
-    function dashboardUrl(statusCode, message, pageId) {
+    function buildUrlWithParams(values) {
       const base = window.location.pathname;
       const params = new URLSearchParams();
-      params.set('t', TOKEN);
-      const nextPage = pageId || ${JSON.stringify(page)};
-      if (nextPage && nextPage !== 'dashboard') params.set('p', nextPage);
-      if (statusCode) params.set('s', statusCode);
-      if (message) params.set('m', message);
+      Object.keys(values || {}).forEach(function (key) {
+        const value = values[key];
+        if (value === undefined || value === null || String(value) === '') return;
+        params.set(key, String(value));
+      });
       return base + '?' + params.toString();
     }
 
-    function goDashboard(statusCode, message, pageId) {
-      window.location.href = dashboardUrl(statusCode, message, pageId);
+    function showBanner(kind, text) {
+      const el = document.getElementById('statusBanner');
+      if (!el || !text) return;
+      el.className = 'banner show ' + (kind === 'success' ? 'success' : 'error');
+      el.textContent = text;
+    }
+
+    if (INITIAL_NOTICE && INITIAL_NOTICE.text) {
+      showBanner(INITIAL_NOTICE.kind, INITIAL_NOTICE.text);
+    }
+    if (INITIAL_ERROR) {
+      showBanner('error', INITIAL_ERROR);
     }
 
     function navigateToPage(pageId) {
-      goDashboard('', '', pageId);
+      window.location.href = buildUrlWithParams({ t: TOKEN, p: pageId });
     }
 
     function submitCreateDispatch(event) {
@@ -289,32 +317,61 @@ function buildAdminDashboardHtml_(user, token, params) {
       };
 
       if (!payload.date || !payload.shift || !payload.client || !payload.jobNumber || !payload.startTime || !payload.startLocation || !payload.instructions || !payload.truckNumbers) {
-        goDashboard('action_failed', 'All fields are required.', 'create-dispatch');
+        showBanner('error', 'All fields are required.');
         return;
       }
 
       google.script.run
-        .withSuccessHandler(function () { goDashboard('create_ok', '', 'dashboard'); })
-        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error'), 'create-dispatch'); })
+        .withSuccessHandler(function () {
+          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'create_ok' });
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+        })
         .createDispatchFromDashboard(TOKEN, payload);
+    }
+
+    function isValidDocUrl(value) {
+      return /^https:\/\//i.test(String(value || '').trim());
+    }
+
+    function isValidDocId(value) {
+      return /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
+    }
+
+    function resolveDispatchDocUrl(docUrl, docId) {
+      const trimmedUrl = String(docUrl || '').trim();
+      const trimmedId = String(docId || '').trim();
+      if (isValidDocUrl(trimmedUrl)) {
+        return trimmedUrl;
+      }
+      if (isValidDocId(trimmedId)) {
+        return 'https://docs.google.com/document/d/' + encodeURIComponent(trimmedId) + '/edit';
+      }
+      return '';
     }
 
     function viewDispatch(dispatchId, encodedDocUrl, encodedDocId) {
       const docUrl = decodeURIComponent(encodedDocUrl || '');
       const docId = decodeURIComponent(encodedDocId || '');
-      const finalUrl = docUrl || (docId ? ('https://docs.google.com/document/d/' + encodeURIComponent(docId) + '/edit') : '');
+      const finalUrl = resolveDispatchDocUrl(docUrl, docId);
       if (!finalUrl) {
-        goDashboard('action_failed', 'Dispatch document URL is missing.');
+        showBanner('error', 'No document is linked for this dispatch.');
         return;
       }
+      console.log('Opening dispatch doc URL', { dispatchId: dispatchId, docUrl: docUrl, docId: docId, finalUrl: finalUrl });
       window.open(finalUrl, '_blank', 'noopener');
     }
 
     function markCompleted(dispatchId) {
       if (!dispatchId) return;
       google.script.run
-        .withSuccessHandler(function () { goDashboard('complete_ok'); })
-        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .withSuccessHandler(function () {
+          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'completed_ok' });
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+        })
         .markDispatchCompletedFromDashboard(TOKEN, dispatchId);
     }
 
@@ -323,12 +380,16 @@ function buildAdminDashboardHtml_(user, token, params) {
       const summary = window.prompt('Enter amendment summary:');
       if (summary === null) return;
       if (!String(summary || '').trim()) {
-        goDashboard('action_failed', 'Amendment summary is required.');
+        showBanner('error', 'Amendment summary is required.');
         return;
       }
       google.script.run
-        .withSuccessHandler(function () { goDashboard('amend_ok'); })
-        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .withSuccessHandler(function () {
+          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'amend_ok' });
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+        })
         .amendDispatchFromDashboard(TOKEN, dispatchId, summary);
     }
 
@@ -337,12 +398,16 @@ function buildAdminDashboardHtml_(user, token, params) {
       const reason = window.prompt('Enter cancellation reason:');
       if (reason === null) return;
       if (!String(reason || '').trim()) {
-        goDashboard('action_failed', 'Cancellation reason is required.');
+        showBanner('error', 'Cancellation reason is required.');
         return;
       }
       google.script.run
-        .withSuccessHandler(function () { goDashboard('cancel_ok'); })
-        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .withSuccessHandler(function () {
+          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'cancel_ok' });
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+        })
         .cancelDispatchFromDashboard(TOKEN, dispatchId, reason);
     }
   </script>
