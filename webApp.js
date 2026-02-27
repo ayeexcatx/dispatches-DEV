@@ -352,23 +352,25 @@ function buildAdminHtml_(opts) {
   <pre id="clientLog">No client log entries.</pre>
   <pre id="clientErrors">No client errors.</pre>
   <script>
+    function appendLine(existing, line, emptySentinel) {
+      var cur = String(existing || '').trim();
+      var prefix = cur && cur !== emptySentinel ? (cur + '\\n') : '';
+      return prefix + line;
+    }
+
     try {
       (function () {
         var bootEl = document.getElementById('jsBoot');
         if (bootEl) bootEl.textContent = 'JS BOOT OK';
         var logEl = document.getElementById('clientLog');
         if (logEl) {
-          var existing = String(logEl.textContent || '').trim();
-          var prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
-          logEl.textContent = prefix + '[boot] script executed at ' + new Date().toISOString();
+          logEl.textContent = appendLine(logEl.textContent, '[boot] script executed at ' + new Date().toISOString(), 'No client log entries.');
         }
       })();
     } catch (bootError) {
       var errorEl = document.getElementById('clientErrors');
       if (errorEl) {
-        var prev = String(errorEl.textContent || '').trim();
-        var errorPrefix = prev && prev !== 'No client errors.' ? (prev + '\n') : '';
-        errorEl.textContent = errorPrefix + '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error'));
+        errorEl.textContent = appendLine(errorEl.textContent, '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error')), 'No client errors.');
       }
     }
   </script>
@@ -386,25 +388,27 @@ function buildAdminHtml_(opts) {
     const CURRENT_PAGE = ${JSON.stringify(page)};
     const SERVER_RENDER_ID = ${JSON.stringify(renderId)};
 
+    function appendLine(existing, line, emptySentinel) {
+      const cur = String(existing || '').trim();
+      const prefix = cur && cur !== emptySentinel ? (cur + '\\n') : '';
+      return prefix + line;
+    }
+
     function appendClientError(message, source) {
       const el = document.getElementById('clientErrors');
       if (!el) return;
-      const existing = String(el.textContent || '').trim();
-      const prefix = existing && existing !== 'No client errors.' ? (existing + '\n') : '';
-      el.textContent = prefix + '[' + new Date().toISOString() + '] ' + (source ? source + ': ' : '') + String(message || 'Unknown client error');
+      el.textContent = appendLine(el.textContent, '[' + new Date().toISOString() + '] ' + (source ? source + ': ' : '') + String(message || 'Unknown client error'), 'No client errors.');
     }
 
     function appendClientLog(message) {
       const el = document.getElementById('clientLog');
       if (!el) return;
-      const existing = String(el.textContent || '').trim();
-      const prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
-      el.textContent = prefix + '[' + new Date().toISOString() + '] ' + String(message || 'log');
+      el.textContent = appendLine(el.textContent, '[' + new Date().toISOString() + '] ' + String(message || 'log'), 'No client log entries.');
     }
 
 
     window.onerror = function (message, source, lineno, colno, error) {
-      const stack = error && error.stack ? ('\n' + error.stack) : '';
+      const stack = error && error.stack ? ('\\n' + error.stack) : '';
       appendClientError(String(message || 'window.onerror') + ' @ ' + String(source || 'inline') + ':' + String(lineno || 0) + ':' + String(colno || 0) + stack, 'onerror');
     };
 
@@ -746,7 +750,7 @@ function renderSafeAdminPage_(token) {
           var errorText = (error && error.stack)
             ? String(error.stack)
             : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
-          write('failure:\n' + errorText);
+          write('failure:\\n' + errorText);
         })
         .getAdminDashboardData(${JSON.stringify(token || '')});
     })();
@@ -880,23 +884,25 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
   <pre id="clientLog">No client log entries.</pre>
   <pre id="clientErrors">No client errors.</pre>
   <script>
+    function appendLine(existing, line, emptySentinel) {
+      var cur = String(existing || '').trim();
+      var prefix = cur && cur !== emptySentinel ? (cur + '\\n') : '';
+      return prefix + line;
+    }
+
     try {
       (function () {
         var bootEl = document.getElementById('jsBoot');
         if (bootEl) bootEl.textContent = 'JS BOOT OK';
         var logEl = document.getElementById('clientLog');
         if (logEl) {
-          var existing = String(logEl.textContent || '').trim();
-          var prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
-          logEl.textContent = prefix + '[boot] script executed at ' + new Date().toISOString();
+          logEl.textContent = appendLine(logEl.textContent, '[boot] script executed at ' + new Date().toISOString(), 'No client log entries.');
         }
       })();
     } catch (bootError) {
       var errorEl = document.getElementById('clientErrors');
       if (errorEl) {
-        var prev = String(errorEl.textContent || '').trim();
-        var errorPrefix = prev && prev !== 'No client errors.' ? (prev + '\n') : '';
-        errorEl.textContent = errorPrefix + '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error'));
+        errorEl.textContent = appendLine(errorEl.textContent, '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error')), 'No client errors.');
       }
     }
   </script>
