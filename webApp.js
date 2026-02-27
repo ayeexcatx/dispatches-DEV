@@ -297,7 +297,7 @@ function buildAdminHtml_(opts) {
     pageContent = `
       <h2 id="dashboardTitle">dashboard</h2>
       <div class="form-actions" style="margin: 0 0 12px;">
-        <button onclick="repairDocLinks()">Repair Doc Links</button>
+        <button type="button" onclick="repairDocLinks()">Repair Doc Links</button>
       </div>
       <table>
         <thead>
@@ -341,10 +341,11 @@ function buildAdminHtml_(opts) {
     form label { display: block; margin-bottom: 12px; font-weight: 600; }
     form input, form textarea { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 8px; font: inherit; }
     .form-actions { margin-top: 8px; }
-    .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; }
+    .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; position: static; pointer-events: none; z-index: 0; max-height: 160px; overflow: auto; }
     .debug-strip code { background: #fff; border: 1px solid #ead69b; border-radius: 3px; padding: 1px 4px; }
-    #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
-    #clientLog { margin-top: 8px; background: #f3f7ff; border: 1px solid #bcd2ff; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
+    #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; position: static; pointer-events: none; z-index: 0; max-height: 160px; overflow: auto; }
+    #clientLog { margin-top: 8px; background: #f3f7ff; border: 1px solid #bcd2ff; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; position: static; pointer-events: none; z-index: 0; max-height: 160px; overflow: auto; }
+    nav.tabs, .tabs a, button { pointer-events: auto; position: relative; z-index: 10; }
   </style>
 </head>
 <body>
@@ -418,6 +419,70 @@ function buildAdminHtml_(opts) {
       appendClientError(text, 'unhandledrejection');
     });
 
+    document.addEventListener('click', function (e) {
+      const target = e && e.target ? e.target : null;
+      if (!target) {
+        appendClientLog('[click] target=unknown id= class=');
+        return;
+      }
+      appendClientLog('[click] target=' + String(target.tagName || 'unknown') + ' id=' + String(target.id || '') + ' class=' + String(target.className || ''));
+    }, true);
+
+    function forceSafeDebugBox(el) {
+      if (!el || !el.style) return;
+      el.style.position = 'static';
+      el.style.pointerEvents = 'none';
+      el.style.zIndex = '0';
+      el.style.maxHeight = '160px';
+      el.style.overflow = 'auto';
+      el.style.display = 'block';
+      el.style.width = 'auto';
+      el.style.height = 'auto';
+    }
+
+    function hardenAdminDiagnostics() {
+      ['statusBanner', 'debugStrip', 'clientLog', 'clientErrors'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        const computed = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        if (computed.position === 'fixed' || computed.position === 'absolute' || rect.width >= window.innerWidth * 0.95 || rect.height >= window.innerHeight * 0.95) {
+          appendClientLog('[overlay-guard] hardening #' + id + ' position=' + computed.position + ' rect=' + [Math.round(rect.left), Math.round(rect.top), Math.round(rect.width), Math.round(rect.height)].join(','));
+        }
+        forceSafeDebugBox(el);
+      });
+    }
+
+    function findViewportOverlays() {
+      const viewportW = Math.max(1, window.innerWidth || 0);
+      const viewportH = Math.max(1, window.innerHeight || 0);
+      const overlayIds = { clientLog: true, clientErrors: true, debugStrip: true, jsBoot: true };
+      const elements = document.body ? document.body.querySelectorAll('*') : [];
+
+      Array.prototype.forEach.call(elements, function (el) {
+        if (!el || !window.getComputedStyle) return;
+        const style = window.getComputedStyle(el);
+        if (style.pointerEvents === 'none') return;
+        if (style.position !== 'fixed' && style.position !== 'absolute') return;
+        const rect = el.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+        const coversMostViewport = rect.width >= viewportW * 0.9 && rect.height >= viewportH * 0.9;
+        if (!coversMostViewport) return;
+
+        const descriptor = (el.tagName || 'unknown') + '#' + String(el.id || '(no-id)') + '.' + String(el.className || '(no-class)');
+        const box = 'x=' + Math.round(rect.left) + ',y=' + Math.round(rect.top) + ',w=' + Math.round(rect.width) + ',h=' + Math.round(rect.height);
+        const detail = '[overlay] ' + descriptor + ' z=' + String(style.zIndex || 'auto') + ' pointer=' + String(style.pointerEvents || 'auto') + ' pos=' + String(style.position || '') + ' ' + box;
+        appendClientError(detail, 'overlay-scan');
+        appendClientLog(detail);
+
+        if (overlayIds[String(el.id || '')]) {
+          forceSafeDebugBox(el);
+          appendClientLog('[overlay-fix] forced safe styles on #' + String(el.id || 'unknown'));
+        }
+      });
+    }
+
     function buildUrlWithParams(values) {
       const base = window.location.pathname;
       const params = new URLSearchParams();
@@ -484,10 +549,10 @@ function buildAdminHtml_(opts) {
           '<td>' + escapeHtml(dispatch.start_time) + '</td>' +
           '<td>' + escapeHtml(dispatch.status) + '</td>' +
           '<td class="actions">' +
-            '<button onclick="viewDispatch(' + JSON.stringify(dispatchId) + ', ' + JSON.stringify(encodeURIComponent(docUrl)) + ', ' + JSON.stringify(encodeURIComponent(docId)) + ')" ' + ((dispatchId && hasLinkedDoc) ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
-            '<button onclick="markCompleted(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Mark Completed</button>' +
-            '<button onclick="amendDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Amend</button>' +
-            '<button onclick="cancelDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Cancel</button>' +
+            '<button type="button" onclick="viewDispatch(' + JSON.stringify(dispatchId) + ', ' + JSON.stringify(encodeURIComponent(docUrl)) + ', ' + JSON.stringify(encodeURIComponent(docId)) + ')" ' + ((dispatchId && hasLinkedDoc) ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
+            '<button type="button" onclick="markCompleted(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Mark Completed</button>' +
+            '<button type="button" onclick="amendDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Amend</button>' +
+            '<button type="button" onclick="cancelDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Cancel</button>' +
           '</td>' +
         '</tr>';
       }).join('');
@@ -666,6 +731,9 @@ function buildAdminHtml_(opts) {
       const sizeEl = document.getElementById('htmlSizeValue');
       if (sizeEl) sizeEl.textContent = String((document.documentElement && document.documentElement.outerHTML && document.documentElement.outerHTML.length) || 0);
     })();
+
+    hardenAdminDiagnostics();
+    findViewportOverlays();
 
     if (CURRENT_PAGE === 'dashboard') {
       loadDashboardData(TOKEN);
