@@ -88,65 +88,138 @@ function buildAdminDashboardHtml_(user, token, params) {
   const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
   const statusParam = String((params && params.s) || '').trim().toLowerCase();
   const messageParam = decodeURIComponent(String((params && params.m) || '').trim());
+  const pageParamRaw = String((params && params.p) || '').trim().toLowerCase();
+  const page = pageParamRaw || 'dashboard';
 
   const notices = {
     complete_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
+    create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
     action_failed: { kind: 'error', text: 'Action failed. Please try again.' },
     unauthorized: { kind: 'error', text: 'You are not authorized to perform this action.' }
   };
   const notice = notices[statusParam] || null;
 
-  if (!sheet || sheet.getLastRow() < 2) {
-    return `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Admin Dispatch Dashboard</title></head>
-<body><h1>Admin Dispatch Dashboard</h1>${notice ? `<div class="banner ${notice.kind}">${notice.text}</div>` : ''}<p>No active dispatches found.</p></body></html>`;
-  }
+  const navItems = [
+    { id: 'dashboard', label: 'Dashboard' },
+    { id: 'create-dispatch', label: 'Create Dispatch' },
+    { id: 'companies-trucks', label: 'Companies/Trucks' },
+    { id: 'users', label: 'Users' }
+  ];
 
-  const lastColumn = sheet.getLastColumn();
-  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
-  const headerMap = {};
-  headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
-
-  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
-  const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
-  if (missingHeader) {
-    throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
-  }
-
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
-  const activeRows = rows.filter(row => String(row[headerMap.status] || '').trim() !== 'Completed');
-
-  const tableRows = activeRows.map((row) => {
-    const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
-    const dateValue = row[headerMap.date];
-    const dateText = dateValue instanceof Date
-      ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-      : String(dateValue || '').trim();
-    const truckNumbers = String(row[headerMap.truck_numbers] || '').trim();
-    const client = String(row[headerMap.client] || '').trim();
-    const jobNumber = String(row[headerMap.job_number] || '').trim();
-    const startTime = String(row[headerMap.start_time] || '').trim();
-    const status = String(row[headerMap.status] || '').trim();
-    const docUrl = headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '';
-    const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
-
-    return `<tr>
-      <td>${dateText}</td>
-      <td>${truckNumbers}</td>
-      <td>${client}</td>
-      <td>${jobNumber}</td>
-      <td>${startTime}</td>
-      <td>${status}</td>
-      <td class="actions">
-        <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${dispatchId ? '' : 'disabled'}>View Dispatch</button>
-        <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
-        <button onclick="amendDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
-        <button onclick="cancelDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
-      </td>
-    </tr>`;
+  const navHtml = navItems.map((item) => {
+    const activeClass = item.id === page ? 'active' : '';
+    return `<a class="tab ${activeClass}" href="#" onclick="navigateToPage('${item.id}'); return false;">${item.label}</a>`;
   }).join('\n');
+
+  let pageContent = '';
+
+  if (page === 'create-dispatch') {
+    pageContent = `
+      <h2>Create Dispatch</h2>
+      <form id="createDispatchForm" class="card" onsubmit="submitCreateDispatch(event)">
+        <label>Date
+          <input type="date" name="date" required>
+        </label>
+        <label>Shift
+          <input type="text" name="shift" placeholder="e.g. 6:00 AM" required>
+        </label>
+        <label>Client
+          <input type="text" name="client" required>
+        </label>
+        <label>Job Number
+          <input type="text" name="jobNumber" required>
+        </label>
+        <label>Start Time
+          <input type="text" name="startTime" placeholder="e.g. 7:30 AM" required>
+        </label>
+        <label>Start Location
+          <input type="text" name="startLocation" required>
+        </label>
+        <label>Instructions
+          <textarea name="instructions" rows="4" required></textarea>
+        </label>
+        <label>Truck Numbers (comma-separated)
+          <input type="text" name="truckNumbers" placeholder="RT03, RT12" required>
+        </label>
+        <div class="form-actions">
+          <button type="submit">Create Dispatch</button>
+        </div>
+      </form>
+    `;
+  } else if (page === 'companies-trucks' || page === 'users') {
+    const title = page === 'companies-trucks' ? 'Companies/Trucks' : 'Users';
+    pageContent = `<h2>${title}</h2><div class="card"><p>Coming soon.</p></div>`;
+  } else {
+    if (!sheet || sheet.getLastRow() < 2) {
+      pageContent = '<h2>Active Dispatches</h2><div class="card"><p>No active dispatches found.</p></div>';
+    } else {
+      const lastColumn = sheet.getLastColumn();
+      const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
+      const headerMap = {};
+      headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
+
+      const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
+      const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
+      if (missingHeader) {
+        throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
+      }
+
+      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
+      const activeRows = rows.filter(row => String(row[headerMap.status] || '').trim() !== 'Completed');
+
+      const tableRows = activeRows.map((row) => {
+        const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
+        const dateValue = row[headerMap.date];
+        const dateText = dateValue instanceof Date
+          ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+          : String(dateValue || '').trim();
+        const truckNumbers = String(row[headerMap.truck_numbers] || '').trim();
+        const client = String(row[headerMap.client] || '').trim();
+        const jobNumber = String(row[headerMap.job_number] || '').trim();
+        const startTime = String(row[headerMap.start_time] || '').trim();
+        const status = String(row[headerMap.status] || '').trim();
+        const docUrl = headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '';
+        const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
+
+        return `<tr>
+          <td>${dateText}</td>
+          <td>${truckNumbers}</td>
+          <td>${client}</td>
+          <td>${jobNumber}</td>
+          <td>${startTime}</td>
+          <td>${status}</td>
+          <td class="actions">
+            <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${dispatchId ? '' : 'disabled'}>View Dispatch</button>
+            <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
+            <button onclick="amendDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
+            <button onclick="cancelDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
+          </td>
+        </tr>`;
+      }).join('\n');
+
+      pageContent = `
+        <h2>Active Dispatches</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Truck Numbers</th>
+              <th>Client</th>
+              <th>Job Number</th>
+              <th>Start Time</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows || '<tr><td colspan="7">No active dispatches found.</td></tr>'}
+          </tbody>
+        </table>
+      `;
+    }
+  }
 
   return `<!DOCTYPE html>
 <html>
@@ -163,43 +236,67 @@ function buildAdminDashboardHtml_(user, token, params) {
     .banner { margin: 12px 0 16px; padding: 10px 12px; border-radius: 4px; font-weight: 600; }
     .banner.success { background: #e6f4ea; color: #137333; border: 1px solid #b7dfbf; }
     .banner.error { background: #fce8e6; color: #a50e0e; border: 1px solid #f6c7c3; }
+    .tabs { display: flex; gap: 8px; margin: 8px 0 16px; }
+    .tab { text-decoration: none; color: #174ea6; background: #e8f0fe; border: 1px solid #d2e3fc; border-radius: 4px; padding: 8px 12px; font-weight: 600; }
+    .tab.active { background: #174ea6; color: #fff; border-color: #174ea6; }
+    .card { background: #fff; border: 1px solid #d9d9d9; border-radius: 6px; padding: 16px; max-width: 760px; }
+    form label { display: block; margin-bottom: 12px; font-weight: 600; }
+    form input, form textarea { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 8px; font: inherit; }
+    .form-actions { margin-top: 8px; }
   </style>
 </head>
 <body>
   <h1>Admin Dispatch Dashboard</h1>
   ${notice ? `<div class="banner ${notice.kind}">${notice.text}</div>` : ''}
   ${messageParam ? `<div class="banner error">${messageParam}</div>` : ''}
-  <h2>Active Dispatches</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Truck Numbers</th>
-        <th>Client</th>
-        <th>Job Number</th>
-        <th>Start Time</th>
-        <th>Status</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${tableRows || '<tr><td colspan="7">No active dispatches found.</td></tr>'}
-    </tbody>
-  </table>
+  <nav class="tabs">${navHtml}</nav>
+  ${pageContent}
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
 
-    function dashboardUrl(statusCode, message) {
+    function dashboardUrl(statusCode, message, pageId) {
       const base = window.location.pathname;
       const params = new URLSearchParams();
       params.set('t', TOKEN);
+      const nextPage = pageId || ${JSON.stringify(page)};
+      if (nextPage && nextPage !== 'dashboard') params.set('p', nextPage);
       if (statusCode) params.set('s', statusCode);
       if (message) params.set('m', message);
       return base + '?' + params.toString();
     }
 
-    function goDashboard(statusCode, message) {
-      window.location.href = dashboardUrl(statusCode, message);
+    function goDashboard(statusCode, message, pageId) {
+      window.location.href = dashboardUrl(statusCode, message, pageId);
+    }
+
+    function navigateToPage(pageId) {
+      goDashboard('', '', pageId);
+    }
+
+    function submitCreateDispatch(event) {
+      event.preventDefault();
+      const form = event.target;
+      const formData = new FormData(form);
+      const payload = {
+        date: String(formData.get('date') || '').trim(),
+        shift: String(formData.get('shift') || '').trim(),
+        client: String(formData.get('client') || '').trim(),
+        jobNumber: String(formData.get('jobNumber') || '').trim(),
+        startTime: String(formData.get('startTime') || '').trim(),
+        startLocation: String(formData.get('startLocation') || '').trim(),
+        instructions: String(formData.get('instructions') || '').trim(),
+        truckNumbers: String(formData.get('truckNumbers') || '').trim()
+      };
+
+      if (!payload.date || !payload.shift || !payload.client || !payload.jobNumber || !payload.startTime || !payload.startLocation || !payload.instructions || !payload.truckNumbers) {
+        goDashboard('action_failed', 'All fields are required.', 'create-dispatch');
+        return;
+      }
+
+      google.script.run
+        .withSuccessHandler(function () { goDashboard('create_ok', '', 'dashboard'); })
+        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error'), 'create-dispatch'); })
+        .createDispatchFromDashboard(TOKEN, payload);
     }
 
     function viewDispatch(dispatchId, encodedDocUrl, encodedDocId) {
@@ -381,6 +478,19 @@ function cancelDispatchFromDashboard(token, dispatchId, cancelReason) {
   const actor = getAuthorizedDashboardActor_(token);
   const updatedBy = actor.userId || actor.displayName || 'unknown';
   return cancelDispatch(dispatchId, cancelReason, updatedBy);
+}
+
+/**
+ * Dashboard action: create a dispatch and generated document.
+ *
+ * @param {string} token - Portal token.
+ * @param {{date:string,shift:string,client:string,jobNumber:string,startTime:string,startLocation:string,instructions:string,truckNumbers:string}} payload
+ * @returns {{status:string}} Server result.
+ */
+function createDispatchFromDashboard(token, payload) {
+  const actor = getAuthorizedDashboardActor_(token);
+  createDispatchFromPortalForm(payload, actor.userId || actor.displayName || 'unknown');
+  return { status: 'ok' };
 }
 
 /**

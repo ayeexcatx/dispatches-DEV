@@ -512,6 +512,7 @@ function formatInsertedTitleParagraph(body, assignmentNumber) {
  */
 function onFormSubmit(e) {
   const values = e.values; // Get all answers that were submitted in this form response.
+  const actorId = String((e && e.actorId) || '').trim();
 
   // These positions match the exact order of fields in the Google Form.
   const date = values[1];
@@ -707,6 +708,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       truckNumbers: assignedTruckNumbers,
       status: 'Dispatched',
       lastUpdatedAt: new Date(),
+      lastUpdatedBy: actorId,
       docId: archiveCopy.getId(),
       docUrl: archiveCopy.getUrl(),
       lastConfirmedAt: '',
@@ -842,6 +844,41 @@ if (companyName) {
 
 }); // Finished processing all selected trucks.
 } // End of the form submit workflow.
+
+
+/**
+ * Create dispatch rows/documents using the same legacy form-submit flow.
+ *
+ * @param {{date:string,shift:string,client:string,jobNumber:string,startTime:string,startLocation:string,instructions:string,truckNumbers:string}} payload
+ * @param {string=} actorId
+ */
+function createDispatchFromPortalForm(payload, actorId) {
+  const safePayload = payload || {};
+  const requiredFields = ['date', 'shift', 'client', 'jobNumber', 'startTime', 'startLocation', 'instructions', 'truckNumbers'];
+  const missingField = requiredFields.find((field) => !String(safePayload[field] || '').trim());
+  if (missingField) {
+    throw new Error(`Missing required dispatch field: ${missingField}`);
+  }
+
+  const values = [];
+  values[1] = String((safePayload.date) || '').trim();
+  values[2] = String((safePayload.shift) || '').trim();
+  values[3] = String((safePayload.client) || '').trim();
+  values[4] = String((safePayload.jobNumber) || '').trim();
+  values[5] = String((safePayload.startTime) || '').trim();
+  values[6] = String((safePayload.startLocation) || '').trim();
+  values[7] = String((safePayload.instructions) || '').trim();
+  values[8] = '';
+  values[9] = String((safePayload.truckNumbers) || '').trim();
+  values[10] = '';
+  values[11] = '';
+  values[12] = '';
+  values[13] = '';
+  values[14] = '';
+  values[15] = '';
+
+  onFormSubmit({ values: values, actorId: String(actorId || '').trim() });
+}
 
 /**
  * Create or update one company web page that lists dispatches by Upcoming, Today, and Past.
