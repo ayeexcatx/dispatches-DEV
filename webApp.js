@@ -14,6 +14,10 @@ function doGet(e) {
   const token = String((e && e.parameter && e.parameter.t) || '').trim();
   const pageParam = String((e && e.parameter && e.parameter.p) || '').trim().toLowerCase();
   try {
+    if (pageParam === 'ping') {
+      return renderPingPage_(token, pageParam);
+    }
+
     const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
     const isDev = isDevEnvironment_();
     const user = token ? getActivePortalUserByToken_(token) : null;
@@ -49,7 +53,16 @@ function doGet(e) {
       }
 
       try {
-        content = buildAdminDashboardHtml_(user, token, e && e.parameter, resolvedPage);
+        content = buildAdminHtml_({
+          user: user,
+          token: token,
+          params: e && e.parameter,
+          forcedPage: resolvedPage
+        });
+        Logger.log('[DEV] admin html length=' + (content ? content.length : 0));
+        if (!content || String(content).trim().length < 50) {
+          throw new Error('Admin HTML empty/too short');
+        }
       } catch (adminError) {
         return renderAdminFallbackPage_(token, user, pageParam, adminError);
       }
@@ -110,12 +123,16 @@ function isAdminOrDispatcherUser_(user) {
 }
 
 /**
- * Build the Admin/Dispatcher dashboard HTML for active dispatches.
+ * Build the Admin/Dispatcher dashboard HTML as a single hardcoded string.
  *
+ * @param {{user:Object,token:string,params:Object,forcedPage:string}} opts - Render options.
  * @returns {string} Dashboard markup.
  */
-function buildAdminDashboardHtml_(user, token, params, forcedPage) {
-  const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
+function buildAdminHtml_(opts) {
+  const user = opts && opts.user ? opts.user : null;
+  const token = opts && opts.token ? opts.token : '';
+  const params = opts && opts.params ? opts.params : null;
+  const forcedPage = opts && opts.forcedPage ? opts.forcedPage : '';
   const messageParam = String((params && params.msg) || '').trim().toLowerCase();
   const rawErrorParam = String((params && params.err) || '').trim();
   const errorParam = rawErrorParam ? decodeURIComponent(rawErrorParam) : '';
@@ -512,6 +529,27 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
   </script>
 </body>
 </html>`;
+
+  return html;
+}
+
+/**
+ * Render a minimal no-dependency ping page for doGet diagnostics.
+ *
+ * @param {string} token - Portal token.
+ * @param {string} pageParam - Requested p value.
+ * @returns {GoogleAppsScript.HTML.HtmlOutput} Static diagnostic HtmlOutput.
+ */
+function renderPingPage_(token, pageParam) {
+  const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>PING</title></head><body style="font-family:Arial,sans-serif;padding:16px;">'
+    + '<h1 style="margin-top:0;">PING OK</h1>'
+    + '<p><strong>token present:</strong> ' + (token ? 'yes' : 'no') + '</p>'
+    + '<p><strong>p:</strong> ' + String(pageParam || '').replace(/</g, '&lt;') + '</p>'
+    + '<p><strong>timestamp:</strong> ' + new Date().toISOString() + '</p>'
+    + '</body></html>';
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('PING')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 /**
@@ -581,58 +619,39 @@ function getAdminDashboardData(token) {
  */
 function renderAdminFallbackPage_(token, user, pageParam, error) {
   const message = (error && error.message) ? error.message : String(error || 'Unknown error');
+  const stack = error && error.stack ? String(error.stack) : '';
   const role = user ? String(user.role || '').trim() : 'unknown';
   const safeMessage = String(message || '').replace(/</g, '&lt;');
-  const renderId = Utilities.getUuid().slice(0, 8);
+  const safeStack = String(stack || '').replace(/</g, '&lt;');
+  const safePageParam = String(pageParam || '(empty)').replace(/</g, '&lt;');
+  const safeRole = String(role || 'unknown').replace(/</g, '&lt;');
   const html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>Admin Fallback</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #222; }
-    .tabs { display: flex; gap: 8px; margin: 8px 0 16px; }
-    .tab { text-decoration: none; color: #174ea6; background: #e8f0fe; border: 1px solid #d2e3fc; border-radius: 4px; padding: 8px 12px; font-weight: 600; }
-    .tab.active { background: #174ea6; color: #fff; border-color: #174ea6; }
-    .card { background: #fff; border: 1px solid #d9d9d9; border-radius: 6px; padding: 16px; max-width: 900px; }
-    code { background: #f1f3f4; padding: 2px 6px; border-radius: 4px; }
-    .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; }
-    #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
+    body { font-family: Arial, sans-serif; margin: 24px; background: #fff; color: #111; }
+    h1 { margin: 0 0 16px; background: #c62828; color: #fff; padding: 16px; font-size: 36px; letter-spacing: 1px; }
+    .card { border: 2px solid #c62828; border-radius: 6px; padding: 16px; max-width: 980px; }
+    code, pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px; padding: 8px; display: block; white-space: pre-wrap; }
+    .meta p { margin: 8px 0; }
   </style>
 </head>
 <body>
-  <h1>CCG Dispatch DEV — Admin</h1>
-  <section class="debug-strip">
-    <strong>Debug</strong> — p: <code>${String(pageParam || 'dashboard').replace(/</g, '&lt;')}</code> | token: <code>${token ? 'yes' : 'no'}</code> | role: <code>${role || 'unknown'}</code> | ts: <code>${new Date().toISOString()}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
-    <pre id="clientErrors">No client errors.</pre>
-  </section>
-  <nav class="tabs">
-    <a class="tab ${pageParam === 'dashboard' || !pageParam ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
-    <a class="tab ${pageParam === 'create' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
-    <a class="tab ${pageParam === 'companies' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
-    <a class="tab ${pageParam === 'users' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=users">Users</a>
-  </nav>
+  <h1>ADMIN FALLBACK</h1>
   <section class="card">
-    <h2>Admin Fallback</h2>
-    <p><strong>token present?</strong> <code>${token ? 'yes' : 'no'}</code></p>
-    <p><strong>user role?</strong> <code>${role || 'unknown'}</code></p>
-    <p><strong>p value?</strong> <code>${String(pageParam || '(empty)').replace(/</g, '&lt;')}</code></p>
-    <p><strong>caught error?</strong> <code>${safeMessage || 'none'}</code></p>
+    <div class="meta">
+      <p><strong>timestamp:</strong> ${new Date().toISOString()}</p>
+      <p><strong>p:</strong> ${safePageParam}</p>
+      <p><strong>token present:</strong> ${token ? 'yes' : 'no'}</p>
+      <p><strong>role:</strong> ${safeRole}</p>
+    </div>
+    <h2>Error message</h2>
+    <code>${safeMessage || 'none'}</code>
+    <h2>Error stack</h2>
+    <pre>${safeStack || 'No stack available.'}</pre>
   </section>
-  <script>
-    (function(){
-      var sizeEl=document.getElementById('htmlSizeValue');
-      if(sizeEl){sizeEl.textContent=String((document.documentElement&&document.documentElement.outerHTML&&document.documentElement.outerHTML.length)||0);}
-      function appendErr(msg,src){
-        var el=document.getElementById('clientErrors'); if(!el) return;
-        var existing=(el.textContent||'').trim();
-        var prefix=existing && existing!=='No client errors.' ? existing+'\n' : '';
-        el.textContent=prefix+'['+new Date().toISOString()+'] '+(src?src+': ':'')+String(msg||'Unknown');
-      }
-      window.onerror=function(m,s,l,c,e){appendErr(String(m||'window.onerror')+' @ '+String(s||'inline')+':'+String(l||0)+':'+String(c||0)+(e&&e.stack?'\n'+e.stack:''),'onerror');};
-      window.addEventListener('unhandledrejection', function(ev){ var r=ev&&ev.reason; appendErr(r&&r.stack?r.stack:(r&&r.message?r.message:String(r||'Unhandled promise rejection')),'unhandledrejection'); });
-    })();
-  </script>
 </body>
 </html>`;
 
