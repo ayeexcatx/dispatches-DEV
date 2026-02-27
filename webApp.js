@@ -11,8 +11,9 @@ const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
  * Expected URL format: ?t=TOKEN
  */
 function doGet(e) {
+  const token = String((e && e.parameter && e.parameter.t) || '').trim();
+  const pageParam = String((e && e.parameter && e.parameter.p) || '').trim().toLowerCase();
   try {
-    const token = String((e && e.parameter && e.parameter.t) || '').trim();
     const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
     const isDev = isDevEnvironment_();
     const user = token ? getActivePortalUserByToken_(token) : null;
@@ -32,7 +33,6 @@ function doGet(e) {
     let pageTitle = 'Dispatch List';
 
     if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
-      const pageParam = String((e && e.parameter && e.parameter.p) || '').trim().toLowerCase();
       if (pageParam === 'repair') {
         repairDispatchDocLinks_DEV_();
         return HtmlService.createHtmlOutput('<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>')
@@ -40,7 +40,19 @@ function doGet(e) {
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       }
 
-      content = buildAdminDashboardHtml_(user, token, e && e.parameter);
+      let resolvedPage = pageParam || 'dashboard';
+      if (resolvedPage === 'create-dispatch') resolvedPage = 'create';
+      if (resolvedPage === 'companies-trucks') resolvedPage = 'companies';
+      const allowedPages = { dashboard: true, create: true, companies: true, users: true };
+      if (!allowedPages[resolvedPage]) {
+        return renderAdminFallbackPage_(token, user, pageParam, new Error('Unknown admin page parameter'));
+      }
+
+      try {
+        content = buildAdminDashboardHtml_(user, token, e && e.parameter, resolvedPage);
+      } catch (adminError) {
+        return renderAdminFallbackPage_(token, user, pageParam, adminError);
+      }
       pageTitle = 'Admin Dispatch Dashboard';
       return HtmlService.createHtmlOutput(content)
         .setTitle(pageTitle)
@@ -75,8 +87,13 @@ function doGet(e) {
       .setTitle(pageTitle)
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   } catch (error) {
-    const message = (error && error.message) ? error.message : String(error || 'Unknown error');
-    return renderErrorPage_(`Unable to render page. ${message}`);
+    let user = null;
+    try {
+      user = token ? getActivePortalUserByToken_(token) : null;
+    } catch (userLookupError) {
+      user = null;
+    }
+    return renderAdminFallbackPage_(token, user, pageParam, error);
   }
 }
 
@@ -97,7 +114,7 @@ function isAdminOrDispatcherUser_(user) {
  *
  * @returns {string} Dashboard markup.
  */
-function buildAdminDashboardHtml_(user, token, params) {
+function buildAdminDashboardHtml_(user, token, params, forcedPage) {
   const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
   const messageParam = String((params && params.msg) || '').trim().toLowerCase();
   const rawErrorParam = String((params && params.err) || '').trim();
@@ -107,7 +124,7 @@ function buildAdminDashboardHtml_(user, token, params) {
     'create-dispatch': 'create',
     'companies-trucks': 'companies'
   };
-  const page = pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
+  const page = forcedPage || pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
 
   const notices = {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
@@ -128,7 +145,7 @@ function buildAdminDashboardHtml_(user, token, params) {
   const navHtml = navItems.map((item) => {
     const activeClass = item.id === page ? 'active' : '';
     const paramsForLink = ['t=' + encodeURIComponent(token || '')];
-    if (item.id !== 'dashboard') paramsForLink.push('p=' + encodeURIComponent(item.id));
+    paramsForLink.push('p=' + encodeURIComponent(item.id));
     const href = '?' + paramsForLink.join('&');
     return `<a class="tab ${activeClass}" href="${href}">${item.label}</a>`;
   }).join('\n');
@@ -275,7 +292,7 @@ function buildAdminDashboardHtml_(user, token, params) {
   </style>
 </head>
 <body>
-  <h1>Admin Dispatch Dashboard</h1>
+  <h1>CCG Dispatch DEV — Admin</h1>
   <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
   ${pageContent}
@@ -438,6 +455,56 @@ function buildAdminDashboardHtml_(user, token, params) {
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * Render an explicit non-empty fallback page for admin routes.
+ *
+ * @param {string} token - Portal token.
+ * @param {{role:string}|null} user - Active user object when available.
+ * @param {string} pageParam - Requested page parameter.
+ * @param {Error|string} error - Original error.
+ * @returns {GoogleAppsScript.HTML.HtmlOutput} Visible fallback HtmlOutput.
+ */
+function renderAdminFallbackPage_(token, user, pageParam, error) {
+  const message = (error && error.message) ? error.message : String(error || 'Unknown error');
+  const role = user ? String(user.role || '').trim() : 'unknown';
+  const safeMessage = String(message || '').replace(/</g, '&lt;');
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Fallback</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #222; }
+    .tabs { display: flex; gap: 8px; margin: 8px 0 16px; }
+    .tab { text-decoration: none; color: #174ea6; background: #e8f0fe; border: 1px solid #d2e3fc; border-radius: 4px; padding: 8px 12px; font-weight: 600; }
+    .tab.active { background: #174ea6; color: #fff; border-color: #174ea6; }
+    .card { background: #fff; border: 1px solid #d9d9d9; border-radius: 6px; padding: 16px; max-width: 900px; }
+    code { background: #f1f3f4; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>CCG Dispatch DEV — Admin</h1>
+  <nav class="tabs">
+    <a class="tab ${pageParam === 'dashboard' || !pageParam ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
+    <a class="tab ${pageParam === 'create' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
+    <a class="tab ${pageParam === 'companies' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
+    <a class="tab ${pageParam === 'users' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=users">Users</a>
+  </nav>
+  <section class="card">
+    <h2>Admin Fallback</h2>
+    <p><strong>token present?</strong> <code>${token ? 'yes' : 'no'}</code></p>
+    <p><strong>user role?</strong> <code>${role || 'unknown'}</code></p>
+    <p><strong>p value?</strong> <code>${String(pageParam || '(empty)').replace(/</g, '&lt;')}</code></p>
+    <p><strong>caught error?</strong> <code>${safeMessage || 'none'}</code></p>
+  </section>
+</body>
+</html>`;
+
+  return HtmlService.createHtmlOutput(html)
+    .setTitle('Admin Fallback')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 /**
