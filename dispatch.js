@@ -25,6 +25,9 @@ const DEV_SCHEMA_HEADERS = {
     'truck_numbers',
     'status',
     'last_updated_at',
+    'last_updated_by',
+    'change_summary',
+    'cancel_reason',
     'doc_id',
     'doc_url',
     'last_confirmed_at',
@@ -188,6 +191,9 @@ function appendDispatchIndexRow_(row) {
     row.truckNumbers,
     row.status,
     row.lastUpdatedAt,
+    row.lastUpdatedBy || '',
+    row.changeSummary || '',
+    row.cancelReason || '',
     row.docId,
     row.docUrl,
     row.lastConfirmedAt,
@@ -299,7 +305,7 @@ function markDispatchConfirmed_(dispatchId) {
  * @param {string} status - New status value.
  * @returns {{rowNumber:number,status:string}} Updated row metadata.
  */
-function updateDispatchStatus_(dispatchId, status) {
+function updateDispatchStatus_(dispatchId, status, opts) {
   const sheet = getSheet_('Dispatches');
   const headerMap = getHeaderIndexMap_(sheet);
   const requiredHeaders = ['dispatch_id', 'status', 'last_updated_at'];
@@ -324,8 +330,28 @@ function updateDispatchStatus_(dispatchId, status) {
   }
 
   const targetRow = idx + 2;
+  const options = opts || {};
+  const actor = String(options.updatedBy || '').trim();
+  const changeSummary = String(options.changeSummary || '').trim();
+  const cancelReason = String(options.cancelReason || '').trim();
+
   sheet.getRange(targetRow, headerMap.status + 1).setValue(status);
   sheet.getRange(targetRow, headerMap.last_updated_at + 1).setValue(new Date());
+  if (headerMap.last_updated_by !== undefined) {
+    sheet.getRange(targetRow, headerMap.last_updated_by + 1).setValue(actor);
+  }
+  if (headerMap.change_summary !== undefined) {
+    sheet.getRange(targetRow, headerMap.change_summary + 1).setValue(changeSummary);
+  }
+  if (headerMap.cancel_reason !== undefined) {
+    sheet.getRange(targetRow, headerMap.cancel_reason + 1).setValue(cancelReason);
+  }
+  if (status === 'Amended' || status === 'Canceled') {
+    if (headerMap.is_confirmed !== undefined) {
+      sheet.getRange(targetRow, headerMap.is_confirmed + 1).setValue(false);
+    }
+  }
+
   return {
     rowNumber: targetRow,
     status: status
@@ -338,9 +364,12 @@ function updateDispatchStatus_(dispatchId, status) {
  * @param {string} dispatchId - Dispatch UUID.
  * @returns {{status:string,rowNumber:number}} Result payload.
  */
-function markDispatchCompleted(dispatchId) {
+function markDispatchCompleted(dispatchId, updatedBy) {
   ensureDevSchema_();
-  const update = updateDispatchStatus_(dispatchId, 'Completed');
+  const update = updateDispatchStatus_(dispatchId, 'Completed', {
+    updatedBy: updatedBy,
+    changeSummary: 'Marked completed'
+  });
   log_(`Dispatch marked completed dispatch_id=${dispatchId} row=${update.rowNumber}`);
   return { status: 'ok', rowNumber: update.rowNumber };
 }
@@ -351,9 +380,17 @@ function markDispatchCompleted(dispatchId) {
  * @param {string} dispatchId - Dispatch UUID.
  * @returns {{status:string,rowNumber:number}} Result payload.
  */
-function amendDispatch(dispatchId) {
+function amendDispatch(dispatchId, changeSummary, updatedBy) {
+  const summary = String(changeSummary || '').trim();
+  if (!summary) {
+    throw new Error('Amendment change summary is required.');
+  }
+
   ensureDevSchema_();
-  const update = updateDispatchStatus_(dispatchId, 'Amended');
+  const update = updateDispatchStatus_(dispatchId, 'Amended', {
+    updatedBy: updatedBy,
+    changeSummary: summary
+  });
   log_(`Dispatch marked amended dispatch_id=${dispatchId} row=${update.rowNumber}`);
   return { status: 'ok', rowNumber: update.rowNumber };
 }
@@ -364,9 +401,18 @@ function amendDispatch(dispatchId) {
  * @param {string} dispatchId - Dispatch UUID.
  * @returns {{status:string,rowNumber:number}} Result payload.
  */
-function cancelDispatch(dispatchId) {
+function cancelDispatch(dispatchId, cancelReason, updatedBy) {
+  const reason = String(cancelReason || '').trim();
+  if (!reason) {
+    throw new Error('Cancellation reason is required.');
+  }
+
   ensureDevSchema_();
-  const update = updateDispatchStatus_(dispatchId, 'Canceled');
+  const update = updateDispatchStatus_(dispatchId, 'Canceled', {
+    updatedBy: updatedBy,
+    changeSummary: `Canceled: ${reason}`,
+    cancelReason: reason
+  });
   log_(`Dispatch marked canceled dispatch_id=${dispatchId} row=${update.rowNumber}`);
   return { status: 'ok', rowNumber: update.rowNumber };
 }

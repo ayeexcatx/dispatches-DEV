@@ -31,7 +31,7 @@ function doGet(e) {
   let pageTitle = 'Dispatch List';
 
   if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
-    content = buildAdminDashboardHtml_();
+    content = buildAdminDashboardHtml_(user, token, e && e.parameter);
     pageTitle = 'Admin Dispatch Dashboard';
     return HtmlService.createHtmlOutput(content)
       .setTitle(pageTitle)
@@ -84,12 +84,24 @@ function isAdminOrDispatcherUser_(user) {
  *
  * @returns {string} Dashboard markup.
  */
-function buildAdminDashboardHtml_() {
+function buildAdminDashboardHtml_(user, token, params) {
   const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
+  const statusParam = String((params && params.s) || '').trim().toLowerCase();
+  const messageParam = decodeURIComponent(String((params && params.m) || '').trim());
+
+  const notices = {
+    complete_ok: { kind: 'success', text: 'Dispatch marked completed.' },
+    amend_ok: { kind: 'success', text: 'Dispatch amended.' },
+    cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
+    action_failed: { kind: 'error', text: 'Action failed. Please try again.' },
+    unauthorized: { kind: 'error', text: 'You are not authorized to perform this action.' }
+  };
+  const notice = notices[statusParam] || null;
+
   if (!sheet || sheet.getLastRow() < 2) {
     return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Admin Dispatch Dashboard</title></head>
-<body><h1>Admin Dispatch Dashboard</h1><p>No active dispatches found.</p></body></html>`;
+<body><h1>Admin Dispatch Dashboard</h1>${notice ? `<div class="banner ${notice.kind}">${notice.text}</div>` : ''}<p>No active dispatches found.</p></body></html>`;
   }
 
   const lastColumn = sheet.getLastColumn();
@@ -97,7 +109,7 @@ function buildAdminDashboardHtml_() {
   const headerMap = {};
   headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
 
-  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status', 'doc_url'];
+  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
   const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
   if (missingHeader) {
     throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
@@ -117,11 +129,8 @@ function buildAdminDashboardHtml_() {
     const jobNumber = String(row[headerMap.job_number] || '').trim();
     const startTime = String(row[headerMap.start_time] || '').trim();
     const status = String(row[headerMap.status] || '').trim();
-    const docUrl = String(row[headerMap.doc_url] || '').trim();
-
-    const viewAction = docUrl
-      ? `<button onclick="window.open('${docUrl}', '_blank')">View Dispatch</button>`
-      : '<button disabled>View Dispatch</button>';
+    const docUrl = headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '';
+    const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
 
     return `<tr>
       <td>${dateText}</td>
@@ -130,11 +139,11 @@ function buildAdminDashboardHtml_() {
       <td>${jobNumber}</td>
       <td>${startTime}</td>
       <td>${status}</td>
-      <td>
-        ${viewAction}
+      <td class="actions">
+        <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${dispatchId ? '' : 'disabled'}>View Dispatch</button>
         <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
-        <button onclick="amendDispatch('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
-        <button onclick="cancelDispatch('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
+        <button onclick="amendDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
+        <button onclick="cancelDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
       </td>
     </tr>`;
   }).join('\n');
@@ -151,10 +160,15 @@ function buildAdminDashboardHtml_() {
     th, td { border: 1px solid #d9d9d9; padding: 10px; text-align: left; vertical-align: top; }
     th { background: #eef3ff; }
     .actions button { margin-right: 8px; margin-bottom: 4px; }
+    .banner { margin: 12px 0 16px; padding: 10px 12px; border-radius: 4px; font-weight: 600; }
+    .banner.success { background: #e6f4ea; color: #137333; border: 1px solid #b7dfbf; }
+    .banner.error { background: #fce8e6; color: #a50e0e; border: 1px solid #f6c7c3; }
   </style>
 </head>
 <body>
   <h1>Admin Dispatch Dashboard</h1>
+  ${notice ? `<div class="banner ${notice.kind}">${notice.text}</div>` : ''}
+  ${messageParam ? `<div class="banner error">${messageParam}</div>` : ''}
   <h2>Active Dispatches</h2>
   <table>
     <thead>
@@ -173,28 +187,66 @@ function buildAdminDashboardHtml_() {
     </tbody>
   </table>
   <script>
+    const TOKEN = ${JSON.stringify(token || '')};
+
+    function dashboardUrl(statusCode, message) {
+      const base = window.location.pathname;
+      const params = new URLSearchParams();
+      params.set('t', TOKEN);
+      if (statusCode) params.set('s', statusCode);
+      if (message) params.set('m', message);
+      return base + '?' + params.toString();
+    }
+
+    function goDashboard(statusCode, message) {
+      window.location.href = dashboardUrl(statusCode, message);
+    }
+
+    function viewDispatch(dispatchId, encodedDocUrl, encodedDocId) {
+      const docUrl = decodeURIComponent(encodedDocUrl || '');
+      const docId = decodeURIComponent(encodedDocId || '');
+      const finalUrl = docUrl || (docId ? ('https://docs.google.com/document/d/' + encodeURIComponent(docId) + '/edit') : '');
+      if (!finalUrl) {
+        goDashboard('action_failed', 'Dispatch document URL is missing.');
+        return;
+      }
+      window.open(finalUrl, '_blank', 'noopener');
+    }
+
     function markCompleted(dispatchId) {
       if (!dispatchId) return;
       google.script.run
-        .withSuccessHandler(function () { location.reload(); })
-        .withFailureHandler(function (error) { alert('Mark complete failed: ' + (error && error.message ? error.message : error)); })
-        .markDispatchCompleted(dispatchId);
+        .withSuccessHandler(function () { goDashboard('complete_ok'); })
+        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .markDispatchCompletedFromDashboard(TOKEN, dispatchId);
     }
 
-    function amendDispatch(dispatchId) {
+    function amendDispatchAction(dispatchId) {
       if (!dispatchId) return;
+      const summary = window.prompt('Enter amendment summary:');
+      if (summary === null) return;
+      if (!String(summary || '').trim()) {
+        goDashboard('action_failed', 'Amendment summary is required.');
+        return;
+      }
       google.script.run
-        .withSuccessHandler(function () { location.reload(); })
-        .withFailureHandler(function (error) { alert('Amend failed: ' + (error && error.message ? error.message : error)); })
-        .amendDispatch(dispatchId);
+        .withSuccessHandler(function () { goDashboard('amend_ok'); })
+        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .amendDispatchFromDashboard(TOKEN, dispatchId, summary);
     }
 
-    function cancelDispatch(dispatchId) {
+    function cancelDispatchAction(dispatchId) {
       if (!dispatchId) return;
+      const reason = window.prompt('Enter cancellation reason:');
+      if (reason === null) return;
+      if (!String(reason || '').trim()) {
+        goDashboard('action_failed', 'Cancellation reason is required.');
+        return;
+      }
       google.script.run
-        .withSuccessHandler(function () { location.reload(); })
-        .withFailureHandler(function (error) { alert('Cancel failed: ' + (error && error.message ? error.message : error)); })
-        .cancelDispatch(dispatchId);
+        .withSuccessHandler(function () { goDashboard('cancel_ok'); })
+        .withFailureHandler(function (error) { goDashboard('action_failed', (error && error.message) || String(error || 'Unknown error')); })
+        .cancelDispatchFromDashboard(TOKEN, dispatchId, reason);
     }
   </script>
 </body>
@@ -268,6 +320,67 @@ function getActivePortalUserByToken_(token) {
     company: String(row[headerMap.company] || '').trim(),
     truckNumber: String(row[headerMap.truck_number] || '').trim()
   };
+}
+
+/**
+ * Validate dispatcher/admin token for dashboard actions.
+ *
+ * @param {string} token - Portal token.
+ * @returns {{userId:string,displayName:string,role:string}} Authenticated actor.
+ */
+function getAuthorizedDashboardActor_(token) {
+  const safeToken = String(token || '').trim();
+  if (!safeToken) {
+    throw new Error('Missing token for dashboard action.');
+  }
+
+  const user = getActivePortalUserByToken_(safeToken);
+  if (!isAdminOrDispatcherUser_(user)) {
+    throw new Error('Unauthorized dashboard action.');
+  }
+
+  return user;
+}
+
+/**
+ * Dashboard action: mark dispatch completed.
+ *
+ * @param {string} token - Portal token.
+ * @param {string} dispatchId - Dispatch UUID.
+ * @returns {{status:string,rowNumber:number}} Server result.
+ */
+function markDispatchCompletedFromDashboard(token, dispatchId) {
+  const actor = getAuthorizedDashboardActor_(token);
+  const updatedBy = actor.userId || actor.displayName || 'unknown';
+  return markDispatchCompleted(dispatchId, updatedBy);
+}
+
+/**
+ * Dashboard action: amend dispatch.
+ *
+ * @param {string} token - Portal token.
+ * @param {string} dispatchId - Dispatch UUID.
+ * @param {string} changeSummary - Required amendment note.
+ * @returns {{status:string,rowNumber:number}} Server result.
+ */
+function amendDispatchFromDashboard(token, dispatchId, changeSummary) {
+  const actor = getAuthorizedDashboardActor_(token);
+  const updatedBy = actor.userId || actor.displayName || 'unknown';
+  return amendDispatch(dispatchId, changeSummary, updatedBy);
+}
+
+/**
+ * Dashboard action: cancel dispatch.
+ *
+ * @param {string} token - Portal token.
+ * @param {string} dispatchId - Dispatch UUID.
+ * @param {string} cancelReason - Required cancellation reason.
+ * @returns {{status:string,rowNumber:number}} Server result.
+ */
+function cancelDispatchFromDashboard(token, dispatchId, cancelReason) {
+  const actor = getAuthorizedDashboardActor_(token);
+  const updatedBy = actor.userId || actor.displayName || 'unknown';
+  return cancelDispatch(dispatchId, cancelReason, updatedBy);
 }
 
 /**
