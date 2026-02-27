@@ -134,6 +134,10 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
     repair_done: { kind: 'success', text: 'Dispatch doc links repair completed.' }
   };
   const notice = notices[messageParam] || null;
+  const renderId = Utilities.getUuid().slice(0, 8);
+  const renderTimestamp = new Date().toISOString();
+  const debugRole = String((user && user.role) || '').trim() || 'unknown';
+  const debugTokenPresent = token ? 'yes' : 'no';
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
@@ -189,84 +193,31 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
     const title = page === 'companies' ? 'Companies/Trucks' : 'Users';
     pageContent = `<h2>${title}</h2><div class="card"><p>Coming soon.</p></div>`;
   } else {
-    if (!sheet || sheet.getLastRow() < 2) {
-      pageContent = '<h2>Active Dispatches</h2><div class="card"><p>No active dispatches found.</p></div>';
-    } else {
-      const lastColumn = sheet.getLastColumn();
-      const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
-      const headerMap = {};
-      headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
-
-      const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
-      const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
-      if (missingHeader) {
-        throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
-      }
-
-      const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
-      const activeRows = rows.filter(row => String(row[headerMap.status] || '').trim() !== 'Completed');
-
-      const isValidDocUrl = (value) => /^https:\/\//i.test(String(value || '').trim());
-      const isValidDocId = (value) => /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
-
-      const tableRows = activeRows.map((row) => {
-        const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
-        const dateValue = row[headerMap.date];
-        const dateText = dateValue instanceof Date
-          ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-          : String(dateValue || '').trim();
-        const truckNumbers = String(row[headerMap.truck_numbers] || '').trim();
-        const client = String(row[headerMap.client] || '').trim();
-        const jobNumber = String(row[headerMap.job_number] || '').trim();
-        const startTime = String(row[headerMap.start_time] || '').trim();
-        const status = String(row[headerMap.status] || '').trim();
-        const docUrl = headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '';
-        const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
-        const hasLinkedDoc = isValidDocUrl(docUrl) || isValidDocId(docId);
-        const viewButtonLabel = hasLinkedDoc ? 'View Dispatch' : 'No doc linked';
-
-        return `<tr data-dispatch-id="${encodeURIComponent(dispatchId)}" data-doc-url="${encodeURIComponent(docUrl)}" data-doc-id="${encodeURIComponent(docId)}">
-          <td>${dateText}</td>
-          <td>${truckNumbers}</td>
-          <td>${client}</td>
-          <td>${jobNumber}</td>
-          <td>${startTime}</td>
-          <td>${status}</td>
-          <td class="actions">
-            <button onclick="viewDispatch('${dispatchId}', '${encodeURIComponent(docUrl)}', '${encodeURIComponent(docId)}')" ${(dispatchId && hasLinkedDoc) ? '' : 'disabled'}>${viewButtonLabel}</button>
-            <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
-            <button onclick="amendDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
-            <button onclick="cancelDispatchAction('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
-          </td>
-        </tr>`;
-      }).join('\n');
-
-      pageContent = `
-        <h2>Active Dispatches</h2>
-        <div class="form-actions" style="margin: 0 0 12px;">
-          <button onclick="repairDocLinks()">Repair Doc Links</button>
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Truck Numbers</th>
-              <th>Client</th>
-              <th>Job Number</th>
-              <th>Start Time</th>
-              <th>Status</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${tableRows || '<tr><td colspan="7">No active dispatches found.</td></tr>'}
-          </tbody>
-        </table>
-      `;
-    }
+    pageContent = `
+      <h2 id="dashboardTitle">Active Dispatches</h2>
+      <div class="form-actions" style="margin: 0 0 12px;">
+        <button onclick="repairDocLinks()">Repair Doc Links</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Truck Numbers</th>
+            <th>Client</th>
+            <th>Job Number</th>
+            <th>Start Time</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="dispatchTableBody">
+          <tr><td colspan="7">Loading dashboard data…</td></tr>
+        </tbody>
+      </table>
+    `;
   }
 
-  return `<!DOCTYPE html>
+  let html = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -289,10 +240,17 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
     form label { display: block; margin-bottom: 12px; font-weight: 600; }
     form input, form textarea { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 8px; font: inherit; }
     .form-actions { margin-top: 8px; }
+    .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; }
+    .debug-strip code { background: #fff; border: 1px solid #ead69b; border-radius: 3px; padding: 1px 4px; }
+    #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
   </style>
 </head>
 <body>
   <h1>CCG Dispatch DEV — Admin</h1>
+  <section class="debug-strip" id="debugStrip">
+    <strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
+    <pre id="clientErrors">No client errors.</pre>
+  </section>
   <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
   ${pageContent}
@@ -300,6 +258,27 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
     const TOKEN = ${JSON.stringify(token || '')};
     const INITIAL_NOTICE = ${JSON.stringify(notice)};
     const INITIAL_ERROR = ${JSON.stringify(errorParam)};
+    const CURRENT_PAGE = ${JSON.stringify(page)};
+    const SERVER_RENDER_ID = ${JSON.stringify(renderId)};
+
+    function appendClientError(message, source) {
+      const el = document.getElementById('clientErrors');
+      if (!el) return;
+      const existing = String(el.textContent || '').trim();
+      const prefix = existing && existing !== 'No client errors.' ? (existing + '\n') : '';
+      el.textContent = prefix + '[' + new Date().toISOString() + '] ' + (source ? source + ': ' : '') + String(message || 'Unknown client error');
+    }
+
+    window.onerror = function (message, source, lineno, colno, error) {
+      const stack = error && error.stack ? ('\n' + error.stack) : '';
+      appendClientError(String(message || 'window.onerror') + ' @ ' + String(source || 'inline') + ':' + String(lineno || 0) + ':' + String(colno || 0) + stack, 'onerror');
+    };
+
+    window.addEventListener('unhandledrejection', function (event) {
+      const reason = event && event.reason;
+      const text = reason && reason.stack ? reason.stack : (reason && reason.message ? reason.message : String(reason || 'Unhandled promise rejection'));
+      appendClientError(text, 'unhandledrejection');
+    });
 
     function buildUrlWithParams(values) {
       const base = window.location.pathname;
@@ -319,11 +298,76 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
       el.textContent = text;
     }
 
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     if (INITIAL_NOTICE && INITIAL_NOTICE.text) {
       showBanner(INITIAL_NOTICE.kind, INITIAL_NOTICE.text);
     }
     if (INITIAL_ERROR) {
       showBanner('error', INITIAL_ERROR);
+    }
+
+    function renderDispatchTable(data) {
+      const tableBody = document.getElementById('dispatchTableBody');
+      if (!tableBody) return;
+      const dispatches = (data && data.activeDispatches) || [];
+      const titleEl = document.getElementById('dashboardTitle');
+      if (titleEl && data && data.currentUser) {
+        const displayName = String(data.currentUser.display_name || '').trim();
+        const role = String(data.currentUser.role || '').trim();
+        titleEl.textContent = displayName
+          ? 'Active Dispatches — ' + displayName + (role ? ' (' + role + ')' : '')
+          : 'Active Dispatches';
+      }
+
+      if (!dispatches.length) {
+        tableBody.innerHTML = '<tr><td colspan="7">No active dispatches found.</td></tr>';
+        return;
+      }
+
+      tableBody.innerHTML = dispatches.map(function (dispatch) {
+        const dispatchId = String(dispatch.dispatch_id || '').trim();
+        const docUrl = String(dispatch.doc_url || '').trim();
+        const docId = String(dispatch.doc_id || '').trim();
+        const hasLinkedDoc = isValidDocUrl(docUrl) || isValidDocId(docId);
+        const viewButtonLabel = hasLinkedDoc ? 'View Dispatch' : 'No doc linked';
+        return '<tr>' +
+          '<td>' + escapeHtml(dispatch.date) + '</td>' +
+          '<td>' + escapeHtml(dispatch.truck_numbers) + '</td>' +
+          '<td>' + escapeHtml(dispatch.client) + '</td>' +
+          '<td>' + escapeHtml(dispatch.job_number) + '</td>' +
+          '<td>' + escapeHtml(dispatch.start_time) + '</td>' +
+          '<td>' + escapeHtml(dispatch.status) + '</td>' +
+          '<td class="actions">' +
+            '<button onclick="viewDispatch(' + JSON.stringify(dispatchId) + ', ' + JSON.stringify(encodeURIComponent(docUrl)) + ', ' + JSON.stringify(encodeURIComponent(docId)) + ')" ' + ((dispatchId && hasLinkedDoc) ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
+            '<button onclick="markCompleted(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Mark Completed</button>' +
+            '<button onclick="amendDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Amend</button>' +
+            '<button onclick="cancelDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Cancel</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    function loadDashboardData(token) {
+      google.script.run
+        .withSuccessHandler(function (data) {
+          renderDispatchTable(data || {});
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+          const tableBody = document.getElementById('dispatchTableBody');
+          if (tableBody) {
+            tableBody.innerHTML = '<tr><td colspan="7">Failed to load dashboard data.</td></tr>';
+          }
+        })
+        .getAdminDashboardData(token);
     }
 
     function navigateToPage(pageId) {
@@ -397,7 +441,8 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
       if (!window.confirm('Run one-time repair for legacy doc links?')) return;
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'repair_done' });
+          showBanner('success', 'Dispatch doc links repair completed.');
+          loadDashboardData(TOKEN);
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -409,7 +454,8 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
       if (!dispatchId) return;
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'completed_ok' });
+          showBanner('success', 'Dispatch marked completed.');
+          loadDashboardData(TOKEN);
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -427,7 +473,8 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
       }
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'amend_ok' });
+          showBanner('success', 'Dispatch amended.');
+          loadDashboardData(TOKEN);
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -445,16 +492,82 @@ function buildAdminDashboardHtml_(user, token, params, forcedPage) {
       }
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'cancel_ok' });
+          showBanner('success', 'Dispatch canceled.');
+          loadDashboardData(TOKEN);
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
         })
         .cancelDispatchFromDashboard(TOKEN, dispatchId, reason);
     }
+
+    (function updateHtmlSize() {
+      const sizeEl = document.getElementById('htmlSizeValue');
+      if (sizeEl) sizeEl.textContent = String((document.documentElement && document.documentElement.outerHTML && document.documentElement.outerHTML.length) || 0);
+    })();
+
+    if (CURRENT_PAGE === 'dashboard') {
+      loadDashboardData(TOKEN);
+    }
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * Retrieve dashboard user/profile and active dispatch rows for client-side rendering.
+ *
+ * @param {string} token - Portal token.
+ * @returns {{currentUser:{display_name:string,role:string},activeDispatches:Array<Object>}}
+ */
+function getAdminDashboardData(token) {
+  const actor = getAuthorizedDashboardActor_(token);
+  const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
+  const response = {
+    currentUser: {
+      display_name: String(actor.displayName || '').trim(),
+      role: String(actor.role || '').trim()
+    },
+    activeDispatches: []
+  };
+
+  if (!sheet || sheet.getLastRow() < 2) {
+    return response;
+  }
+
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
+  const headerMap = {};
+  headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
+
+  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
+  const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
+  if (missingHeader) {
+    throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
+  }
+
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
+  response.activeDispatches = rows
+    .filter(row => String(row[headerMap.status] || '').trim() !== 'Completed')
+    .map((row) => {
+      const dateValue = row[headerMap.date];
+      const dateText = dateValue instanceof Date
+        ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+        : String(dateValue || '').trim();
+      return {
+        dispatch_id: String(row[headerMap.dispatch_id] || '').trim(),
+        date: dateText,
+        truck_numbers: String(row[headerMap.truck_numbers] || '').trim(),
+        client: String(row[headerMap.client] || '').trim(),
+        job_number: String(row[headerMap.job_number] || '').trim(),
+        start_time: String(row[headerMap.start_time] || '').trim(),
+        status: String(row[headerMap.status] || '').trim(),
+        doc_url: headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '',
+        doc_id: headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : ''
+      };
+    });
+
+  return response;
 }
 
 /**
@@ -470,6 +583,7 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
   const message = (error && error.message) ? error.message : String(error || 'Unknown error');
   const role = user ? String(user.role || '').trim() : 'unknown';
   const safeMessage = String(message || '').replace(/</g, '&lt;');
+  const renderId = Utilities.getUuid().slice(0, 8);
   const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -482,10 +596,16 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
     .tab.active { background: #174ea6; color: #fff; border-color: #174ea6; }
     .card { background: #fff; border: 1px solid #d9d9d9; border-radius: 6px; padding: 16px; max-width: 900px; }
     code { background: #f1f3f4; padding: 2px 6px; border-radius: 4px; }
+    .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; }
+    #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
   </style>
 </head>
 <body>
   <h1>CCG Dispatch DEV — Admin</h1>
+  <section class="debug-strip">
+    <strong>Debug</strong> — p: <code>${String(pageParam || 'dashboard').replace(/</g, '&lt;')}</code> | token: <code>${token ? 'yes' : 'no'}</code> | role: <code>${role || 'unknown'}</code> | ts: <code>${new Date().toISOString()}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
+    <pre id="clientErrors">No client errors.</pre>
+  </section>
   <nav class="tabs">
     <a class="tab ${pageParam === 'dashboard' || !pageParam ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
     <a class="tab ${pageParam === 'create' ? 'active' : ''}" href="?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
@@ -499,6 +619,20 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
     <p><strong>p value?</strong> <code>${String(pageParam || '(empty)').replace(/</g, '&lt;')}</code></p>
     <p><strong>caught error?</strong> <code>${safeMessage || 'none'}</code></p>
   </section>
+  <script>
+    (function(){
+      var sizeEl=document.getElementById('htmlSizeValue');
+      if(sizeEl){sizeEl.textContent=String((document.documentElement&&document.documentElement.outerHTML&&document.documentElement.outerHTML.length)||0);}
+      function appendErr(msg,src){
+        var el=document.getElementById('clientErrors'); if(!el) return;
+        var existing=(el.textContent||'').trim();
+        var prefix=existing && existing!=='No client errors.' ? existing+'\n' : '';
+        el.textContent=prefix+'['+new Date().toISOString()+'] '+(src?src+': ':'')+String(msg||'Unknown');
+      }
+      window.onerror=function(m,s,l,c,e){appendErr(String(m||'window.onerror')+' @ '+String(s||'inline')+':'+String(l||0)+':'+String(c||0)+(e&&e.stack?'\n'+e.stack:''),'onerror');};
+      window.addEventListener('unhandledrejection', function(ev){ var r=ev&&ev.reason; appendErr(r&&r.stack?r.stack:(r&&r.message?r.message:String(r||'Unhandled promise rejection')),'unhandledrejection'); });
+    })();
+  </script>
 </body>
 </html>`;
 
@@ -972,6 +1106,7 @@ function renderErrorHtml_(message) {
   </div>
 </body>
 </html>`;
+  return html;
 }
 
 /**
