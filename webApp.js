@@ -41,14 +41,12 @@ function doGet(e) {
         const unauthorizedHtml = 'not authorized';
         logDoGet_(unauthorizedHtml.length);
         return HtmlService.createHtmlOutput(unauthorizedHtml)
-          .setTitle('Not Authorized')
-          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+          .setTitle('Not Authorized');
       }
       const liteHtml = '<!doctype html><html><body><div id="boot">PENDING</div><pre id="log">empty</pre><script>document.getElementById(\'boot\').textContent=\'OK\';document.getElementById(\'log\').textContent=\'script ran at \' + new Date().toISOString();</script></body></html>';
       logDoGet_(liteHtml.length);
       return HtmlService.createHtmlOutput(liteHtml)
-        .setTitle('Lite Test')
-        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+        .setTitle('Lite Test');
     }
 
     if (isAdmin) {
@@ -80,8 +78,7 @@ function doGet(e) {
         const repairHtml = '<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>';
         logDoGet_(repairHtml.length);
         return HtmlService.createHtmlOutput(repairHtml)
-          .setTitle('Repairing Dispatch Links')
-          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+          .setTitle('Repairing Dispatch Links');
       }
 
       const resolvedPage = p;
@@ -103,8 +100,7 @@ function doGet(e) {
       pageTitle = 'Admin Dispatch Dashboard';
       logDoGet_(content.length);
       return HtmlService.createHtmlOutput(content)
-        .setTitle(pageTitle)
-        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+        .setTitle(pageTitle);
     }
 
     if (!shouldUseCompanyFallback && user.truckNumber) {
@@ -135,8 +131,7 @@ function doGet(e) {
 
     logDoGet_(content ? content.length : 0);
     return HtmlService.createHtmlOutput(content)
-      .setTitle(pageTitle)
-      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      .setTitle(pageTitle);
   } catch (error) {
     try {
       user = token ? getActivePortalUserByToken_(token) : null;
@@ -659,8 +654,7 @@ function renderPingPage_(token, pageParam) {
     + '<p><strong>timestamp:</strong> ' + new Date().toISOString() + '</p>'
     + '</body></html>';
   return HtmlService.createHtmlOutput(html)
-    .setTitle('PING')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle('PING');
 }
 
 /**
@@ -807,8 +801,7 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
 </html>`;
 
   return HtmlService.createHtmlOutput(html)
-    .setTitle('Admin Fallback')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle('Admin Fallback');
 }
 
 /**
@@ -1246,8 +1239,7 @@ function filterDispatchBlocksByTruck_(html, truckNumber, companyName) {
  */
 function renderErrorPage_(message) {
   return HtmlService.createHtmlOutput(renderErrorHtml_(message))
-    .setTitle('Dispatch Portal Error')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle('Dispatch Portal Error');
 }
 
 /**
