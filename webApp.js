@@ -59,7 +59,7 @@ function doGet(e) {
           params: e && e.parameter,
           forcedPage: resolvedPage
         });
-        Logger.log('[DEV] admin html length=' + (content ? content.length : 0));
+        Logger.log('[DEV] admin render p=' + resolvedPage + ' htmlLen=' + (content ? content.length : 0));
         if (!content || String(content).trim().length < 50) {
           throw new Error('Admin HTML empty/too short');
         }
@@ -175,8 +175,10 @@ function buildAdminHtml_(opts) {
 
   if (page === 'create') {
     pageContent = `
-      <h2>Create Dispatch</h2>
-      <form id="createDispatchForm" class="card" onsubmit="submitCreateDispatch(event)">
+      <h2>create</h2>
+      <section class="card page-shell">
+        <p>Create Dispatch page.</p>
+        <form id="createDispatchForm" onsubmit="submitCreateDispatch(event)">
         <label>Date
           <input type="date" name="date" required>
         </label>
@@ -204,14 +206,16 @@ function buildAdminHtml_(opts) {
         <div class="form-actions">
           <button type="submit">Create Dispatch</button>
         </div>
-      </form>
+        </form>
+      </section>
     `;
-  } else if (page === 'companies' || page === 'users') {
-    const title = page === 'companies' ? 'Companies/Trucks' : 'Users';
-    pageContent = `<h2>${title}</h2><div class="card"><p>Coming soon.</p></div>`;
+  } else if (page === 'companies') {
+    pageContent = '<h2>companies</h2><section class="card page-shell"><p>Companies/Trucks placeholder content.</p></section>';
+  } else if (page === 'users') {
+    pageContent = '<h2>users</h2><section class="card page-shell"><p>Users placeholder content.</p></section>';
   } else {
     pageContent = `
-      <h2 id="dashboardTitle">Active Dispatches</h2>
+      <h2 id="dashboardTitle">dashboard</h2>
       <div class="form-actions" style="margin: 0 0 12px;">
         <button onclick="repairDocLinks()">Repair Doc Links</button>
       </div>
@@ -260,6 +264,7 @@ function buildAdminHtml_(opts) {
     .debug-strip { margin: 10px 0 14px; padding: 8px 10px; background: #fff8e1; border: 1px solid #f2cf6f; border-radius: 4px; font-size: 12px; }
     .debug-strip code { background: #fff; border: 1px solid #ead69b; border-radius: 3px; padding: 1px 4px; }
     #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
+    #clientLog { margin-top: 8px; background: #f3f7ff; border: 1px solid #bcd2ff; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; }
   </style>
 </head>
 <body>
@@ -267,6 +272,7 @@ function buildAdminHtml_(opts) {
   <section class="debug-strip" id="debugStrip">
     <strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
     <pre id="clientErrors">No client errors.</pre>
+    <pre id="clientLog">No client log entries.</pre>
   </section>
   <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
@@ -285,6 +291,15 @@ function buildAdminHtml_(opts) {
       const prefix = existing && existing !== 'No client errors.' ? (existing + '\n') : '';
       el.textContent = prefix + '[' + new Date().toISOString() + '] ' + (source ? source + ': ' : '') + String(message || 'Unknown client error');
     }
+
+    function appendClientLog(message) {
+      const el = document.getElementById('clientLog');
+      if (!el) return;
+      const existing = String(el.textContent || '').trim();
+      const prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
+      el.textContent = prefix + '[' + new Date().toISOString() + '] ' + String(message || 'log');
+    }
+
 
     window.onerror = function (message, source, lineno, colno, error) {
       const stack = error && error.stack ? ('\n' + error.stack) : '';
@@ -340,8 +355,8 @@ function buildAdminHtml_(opts) {
         const displayName = String(data.currentUser.display_name || '').trim();
         const role = String(data.currentUser.role || '').trim();
         titleEl.textContent = displayName
-          ? 'Active Dispatches — ' + displayName + (role ? ' (' + role + ')' : '')
-          : 'Active Dispatches';
+          ? 'dashboard — ' + displayName + (role ? ' (' + role + ')' : '')
+          : 'dashboard';
       }
 
       if (!dispatches.length) {
@@ -373,12 +388,36 @@ function buildAdminHtml_(opts) {
     }
 
     function loadDashboardData(token) {
+      const sizeEl = document.getElementById('htmlSizeValue');
+      if (sizeEl) {
+        sizeEl.textContent = String((document.documentElement && document.documentElement.outerHTML && document.documentElement.outerHTML.length) || 0);
+      }
+
+      appendClientLog('calling getAdminDashboardData');
+
+      let settled = false;
+      const watchdog = window.setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        showBanner('error', 'Dashboard data load timed out');
+        appendClientLog('timeout');
+      }, 10000);
+
       google.script.run
         .withSuccessHandler(function (data) {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(watchdog);
+          appendClientLog('success');
           renderDispatchTable(data || {});
         })
         .withFailureHandler(function (error) {
-          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(watchdog);
+          const message = (error && error.message) || String(error || 'Unknown error');
+          appendClientLog('failure: ' + message);
+          showBanner('error', message);
           const tableBody = document.getElementById('dispatchTableBody');
           if (tableBody) {
             tableBody.innerHTML = '<tr><td colspan="7">Failed to load dashboard data.</td></tr>';
@@ -530,6 +569,10 @@ function buildAdminHtml_(opts) {
 </body>
 </html>`;
 
+  if (!html || !String(html).trim()) {
+    html = '<!DOCTYPE html><html><body><h1>admin</h1><h2>' + (page || 'dashboard') + '</h2><div>Fallback admin content.</div></body></html>';
+  }
+
   return html;
 }
 
@@ -559,53 +602,68 @@ function renderPingPage_(token, pageParam) {
  * @returns {{currentUser:{display_name:string,role:string},activeDispatches:Array<Object>}}
  */
 function getAdminDashboardData(token) {
-  const actor = getAuthorizedDashboardActor_(token);
-  const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
-  const response = {
-    currentUser: {
-      display_name: String(actor.displayName || '').trim(),
-      role: String(actor.role || '').trim()
-    },
-    activeDispatches: []
-  };
+  const tokenPresent = String(token || '').trim() ? 'yes' : 'no';
+  Logger.log('[DEV] getAdminDashboardData start tokenPresent=' + tokenPresent);
 
-  if (!sheet || sheet.getLastRow() < 2) {
+  let actor = null;
+  try {
+    actor = getAuthorizedDashboardActor_(token);
+    const actorRole = String((actor && actor.role) || '').trim().toLowerCase() || 'unknown';
+    Logger.log('[DEV] getAdminDashboardData actor role=' + actorRole);
+
+    const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
+    const response = {
+      currentUser: {
+        display_name: String((actor && actor.displayName) || '').trim(),
+        role: String((actor && actor.role) || '').trim().toLowerCase()
+      },
+      activeDispatches: []
+    };
+
+    if (!sheet || sheet.getLastRow() < 2) {
+      Logger.log('[DEV] getAdminDashboardData end role=' + response.currentUser.role + ' rows=0');
+      return response;
+    }
+
+    const lastColumn = sheet.getLastColumn();
+    const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
+    const headerMap = {};
+    headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
+
+    const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
+    const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
+    if (missingHeader) {
+      throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
+    }
+
+    const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
+    response.activeDispatches = rows
+      .filter(row => String(row[headerMap.status] || '').trim() !== 'Completed')
+      .map((row) => {
+        const dateValue = row[headerMap.date];
+        const dateText = dateValue instanceof Date
+          ? dateValue.toISOString()
+          : String(dateValue || '').trim();
+        return {
+          dispatch_id: String(row[headerMap.dispatch_id] || '').trim(),
+          date: dateText,
+          truck_numbers: String(row[headerMap.truck_numbers] || '').trim(),
+          client: String(row[headerMap.client] || '').trim(),
+          job_number: String(row[headerMap.job_number] || '').trim(),
+          start_time: String(row[headerMap.start_time] || '').trim(),
+          status: String(row[headerMap.status] || '').trim(),
+          doc_url: headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '',
+          doc_id: headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : ''
+        };
+      });
+
+    Logger.log('[DEV] getAdminDashboardData end role=' + response.currentUser.role + ' rows=' + response.activeDispatches.length);
     return response;
+  } catch (error) {
+    const roleForError = String((actor && actor.role) || 'unknown').trim().toLowerCase() || 'unknown';
+    Logger.log('[DEV] getAdminDashboardData error role=' + roleForError + ' message=' + ((error && error.message) ? error.message : String(error || 'unknown')));
+    throw error;
   }
-
-  const lastColumn = sheet.getLastColumn();
-  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
-  const headerMap = {};
-  headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
-
-  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status'];
-  const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
-  if (missingHeader) {
-    throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
-  }
-
-  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
-  response.activeDispatches = rows
-    .filter(row => String(row[headerMap.status] || '').trim() !== 'Completed')
-    .map((row) => {
-      const dateValue = row[headerMap.date];
-      const dateText = dateValue instanceof Date
-        ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-        : String(dateValue || '').trim();
-      return {
-        dispatch_id: String(row[headerMap.dispatch_id] || '').trim(),
-        date: dateText,
-        truck_numbers: String(row[headerMap.truck_numbers] || '').trim(),
-        client: String(row[headerMap.client] || '').trim(),
-        job_number: String(row[headerMap.job_number] || '').trim(),
-        start_time: String(row[headerMap.start_time] || '').trim(),
-        status: String(row[headerMap.status] || '').trim(),
-        doc_url: headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '',
-        doc_id: headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : ''
-      };
-    });
-
-  return response;
 }
 
 /**
