@@ -49,6 +49,46 @@ function doGet(e) {
         .setTitle('Lite Test');
     }
 
+    if (pageParam === 'safe') {
+      p = 'safe';
+      if (!isAdmin) {
+        const unauthorizedHtml = 'not authorized';
+        logDoGet_(unauthorizedHtml.length);
+        return HtmlService.createHtmlOutput(unauthorizedHtml)
+          .setTitle('Not Authorized');
+      }
+      const safeHtml = renderSafeAdminPage_(token);
+      logDoGet_(safeHtml.length);
+      return HtmlService.createHtmlOutput(safeHtml)
+        .setTitle('Safe Dashboard');
+    }
+
+    if (pageParam === 'source') {
+      p = 'source';
+      if (!isAdmin) {
+        const unauthorizedHtml = 'not authorized';
+        logDoGet_(unauthorizedHtml.length);
+        return HtmlService.createHtmlOutput(unauthorizedHtml)
+          .setTitle('Not Authorized');
+      }
+
+      const dashboardHtml = buildAdminHtml_({
+        user: user,
+        token: token,
+        params: e && e.parameter,
+        forcedPage: 'dashboard'
+      });
+      Logger.log('[DEV] dashboard html head=' + String(dashboardHtml || '').slice(0, 500));
+      Logger.log('[DEV] dashboard html tail=' + String(dashboardHtml || '').slice(-500));
+
+      const sourceHtml = '<!doctype html><html><head><meta charset="UTF-8"><title>Dashboard Source</title></head><body><h1>DASHBOARD SOURCE</h1><pre>'
+        + escapeHtmlForPre_(dashboardHtml || '')
+        + '</pre></body></html>';
+      logDoGet_(sourceHtml.length);
+      return HtmlService.createHtmlOutput(sourceHtml)
+        .setTitle('Dashboard Source');
+    }
+
     if (isAdmin) {
       const pageAliases = { 'create-dispatch': 'create', 'companies-trucks': 'companies' };
       const allowedPages = { dashboard: true, create: true, companies: true, users: true };
@@ -198,7 +238,9 @@ function buildAdminHtml_(opts) {
     { id: 'create', label: 'Create Dispatch' },
     { id: 'companies', label: 'Companies/Trucks' },
     { id: 'users', label: 'Users' },
-    { id: 'lite', label: 'Lite Test' }
+    { id: 'lite', label: 'Lite Test' },
+    { id: 'safe', label: 'Safe' },
+    { id: 'source', label: 'Source' }
   ];
 
   const navHtml = navItems.map((item) => {
@@ -637,6 +679,80 @@ function buildAdminHtml_(opts) {
   }
 
   return html;
+}
+
+
+/**
+ * Escape text for safe display inside an HTML <pre> element.
+ *
+ * @param {string} value - Raw text.
+ * @returns {string} Escaped HTML entities.
+ */
+function escapeHtmlForPre_(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Render a minimal admin-safe page for dashboard script debugging.
+ *
+ * @param {string} token - Active portal token.
+ * @returns {string} Safe HTML markup.
+ */
+function renderSafeAdminPage_(token) {
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Safe Dashboard</title>
+</head>
+<body>
+  <nav>
+    <a href="?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=users">Users</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=lite">Lite Test</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=safe">Safe</a>
+    <a href="?t=${encodeURIComponent(token || '')}&p=source">Source</a>
+  </nav>
+  <h1>SAFE DASHBOARD</h1>
+  <pre id="out">loading...</pre>
+  <script>
+    (function () {
+      var out = document.getElementById('out');
+      function write(text) {
+        if (out) out.textContent = String(text || '');
+      }
+
+      write('boot ok');
+
+      google.script.run
+        .withSuccessHandler(function (resp) {
+          var dispatches = (resp && resp.activeDispatches && resp.activeDispatches.slice)
+            ? resp.activeDispatches.slice(0, 5)
+            : [];
+          write(JSON.stringify({
+            ok: true,
+            activeDispatches: dispatches,
+            raw: resp
+          }, null, 2));
+        })
+        .withFailureHandler(function (error) {
+          var errorText = (error && error.stack)
+            ? String(error.stack)
+            : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
+          write('failure:\n' + errorText);
+        })
+        .getAdminDashboardData(${JSON.stringify(token || '')});
+    })();
+  </script>
+</body>
+</html>`;
 }
 
 /**
