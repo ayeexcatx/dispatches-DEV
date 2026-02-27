@@ -13,22 +13,43 @@ const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
 function doGet(e) {
   const token = String((e && e.parameter && e.parameter.t) || '').trim();
   const pageParam = String((e && e.parameter && e.parameter.p) || '').trim().toLowerCase();
+  let user = null;
+  let isAdmin = false;
+  let p = pageParam || 'dashboard';
+
+  function logDoGet_(htmlLen) {
+    Logger.log('[DEV] doGet p=' + p + ' tokenPresent=' + (!!token) + ' isAdmin=' + isAdmin + ' userRole=' + (user && user.role));
+    Logger.log('[DEV] doGet htmlLen=' + Number(htmlLen || 0));
+  }
+
   try {
     if (pageParam === 'ping') {
+      p = 'ping';
+      logDoGet_(58);
       return renderPingPage_(token, pageParam);
     }
 
     const companyParam = String((e && e.parameter && e.parameter.company) || '').trim();
     const isDev = isDevEnvironment_();
-    const user = token ? getActivePortalUserByToken_(token) : null;
+    user = token ? getActivePortalUserByToken_(token) : null;
+    isAdmin = isAdminOrDispatcherUser_(user);
     const shouldUseCompanyFallback = isDev && companyParam && (!token || !user);
+
+    if (isAdmin) {
+      const pageAliases = { 'create-dispatch': 'create', 'companies-trucks': 'companies' };
+      const allowedPages = { dashboard: true, create: true, companies: true, users: true };
+      p = pageAliases[p] || p;
+      if (!allowedPages[p]) p = 'dashboard';
+    }
 
     if (!shouldUseCompanyFallback) {
       if (!token) {
+        logDoGet_(0);
         return renderErrorPage_('Invalid or missing token. Please use your dispatch portal link.');
       }
 
       if (!user) {
+        logDoGet_(0);
         return renderErrorPage_('Invalid or missing token. Please contact dispatch admin.');
       }
     }
@@ -36,22 +57,18 @@ function doGet(e) {
     let content = '';
     let pageTitle = 'Dispatch List';
 
-    if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
+    if (!shouldUseCompanyFallback && isAdmin) {
       if (pageParam === 'repair') {
+        p = 'repair';
         repairDispatchDocLinks_DEV_();
-        return HtmlService.createHtmlOutput('<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>')
+        const repairHtml = '<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>';
+        logDoGet_(repairHtml.length);
+        return HtmlService.createHtmlOutput(repairHtml)
           .setTitle('Repairing Dispatch Links')
           .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
       }
 
-      let resolvedPage = pageParam || 'dashboard';
-      if (resolvedPage === 'create-dispatch') resolvedPage = 'create';
-      if (resolvedPage === 'companies-trucks') resolvedPage = 'companies';
-      const allowedPages = { dashboard: true, create: true, companies: true, users: true };
-      if (!allowedPages[resolvedPage]) {
-        return renderAdminFallbackPage_(token, user, pageParam, new Error('Unknown admin page parameter'));
-      }
-
+      const resolvedPage = p;
       try {
         content = buildAdminHtml_({
           user: user,
@@ -64,9 +81,11 @@ function doGet(e) {
           throw new Error('Admin HTML empty/too short');
         }
       } catch (adminError) {
+        logDoGet_(0);
         return renderAdminFallbackPage_(token, user, pageParam, adminError);
       }
       pageTitle = 'Admin Dispatch Dashboard';
+      logDoGet_(content.length);
       return HtmlService.createHtmlOutput(content)
         .setTitle(pageTitle)
         .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
@@ -78,6 +97,7 @@ function doGet(e) {
     } else {
       const resolvedCompany = shouldUseCompanyFallback ? companyParam : user.company;
       if (!resolvedCompany) {
+        logDoGet_(0);
         return renderErrorPage_('Token is missing truck/company scope. Please contact dispatch admin.');
       }
 
@@ -86,6 +106,7 @@ function doGet(e) {
       const file = findFileRecursively(archivesFolder, companyFileName);
 
       if (!file) {
+        logDoGet_(0);
         return renderErrorPage_(`No dispatch list found for company: ${resolvedCompany}.`);
       }
 
@@ -96,16 +117,19 @@ function doGet(e) {
       pageTitle = `${resolvedCompany} Dispatch List`;
     }
 
+    logDoGet_(content ? content.length : 0);
     return HtmlService.createHtmlOutput(content)
       .setTitle(pageTitle)
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   } catch (error) {
-    let user = null;
     try {
       user = token ? getActivePortalUserByToken_(token) : null;
+      isAdmin = isAdminOrDispatcherUser_(user);
     } catch (userLookupError) {
       user = null;
+      isAdmin = false;
     }
+    logDoGet_(0);
     return renderAdminFallbackPage_(token, user, pageParam, error);
   }
 }
@@ -141,7 +165,9 @@ function buildAdminHtml_(opts) {
     'create-dispatch': 'create',
     'companies-trucks': 'companies'
   };
-  const page = forcedPage || pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
+  const allowedPages = { dashboard: true, create: true, companies: true, users: true };
+  let page = forcedPage || pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
+  if (!allowedPages[page]) page = 'dashboard';
 
   const notices = {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
@@ -175,7 +201,7 @@ function buildAdminHtml_(opts) {
 
   if (page === 'create') {
     pageContent = `
-      <h2>create</h2>
+      <h2>Create Dispatch</h2>
       <section class="card page-shell">
         <p>Create Dispatch page.</p>
         <form id="createDispatchForm" onsubmit="submitCreateDispatch(event)">
@@ -268,11 +294,33 @@ function buildAdminHtml_(opts) {
   </style>
 </head>
 <body>
+  <div id="jsBoot" style="padding:6px;border:2px solid #000;display:inline-block;">JS BOOT PENDING</div>
+  <pre id="clientLog">No client log entries.</pre>
+  <pre id="clientErrors">No client errors.</pre>
+  <script>
+    try {
+      (function () {
+        var bootEl = document.getElementById('jsBoot');
+        if (bootEl) bootEl.textContent = 'JS BOOT OK';
+        var logEl = document.getElementById('clientLog');
+        if (logEl) {
+          var existing = String(logEl.textContent || '').trim();
+          var prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
+          logEl.textContent = prefix + '[boot] script executed at ' + new Date().toISOString();
+        }
+      })();
+    } catch (bootError) {
+      var errorEl = document.getElementById('clientErrors');
+      if (errorEl) {
+        var prev = String(errorEl.textContent || '').trim();
+        var errorPrefix = prev && prev !== 'No client errors.' ? (prev + '\n') : '';
+        errorEl.textContent = errorPrefix + '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error'));
+      }
+    }
+  </script>
   <h1>CCG Dispatch DEV — Admin</h1>
   <section class="debug-strip" id="debugStrip">
     <strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
-    <pre id="clientErrors">No client errors.</pre>
-    <pre id="clientLog">No client log entries.</pre>
   </section>
   <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
@@ -393,14 +441,14 @@ function buildAdminHtml_(opts) {
         sizeEl.textContent = String((document.documentElement && document.documentElement.outerHTML && document.documentElement.outerHTML.length) || 0);
       }
 
-      appendClientLog('calling getAdminDashboardData');
+      appendClientLog('[load] calling getAdminDashboardData');
 
       let settled = false;
       const watchdog = window.setTimeout(function () {
         if (settled) return;
         settled = true;
         showBanner('error', 'Dashboard data load timed out');
-        appendClientLog('timeout');
+        appendClientLog('[load] timeout');
       }, 10000);
 
       google.script.run
@@ -408,16 +456,19 @@ function buildAdminHtml_(opts) {
           if (settled) return;
           settled = true;
           window.clearTimeout(watchdog);
-          appendClientLog('success');
+          const dispatchCount = (data && data.activeDispatches && data.activeDispatches.length) || 0;
+          appendClientLog('[load] success, dispatches=' + dispatchCount);
           renderDispatchTable(data || {});
         })
         .withFailureHandler(function (error) {
           if (settled) return;
           settled = true;
           window.clearTimeout(watchdog);
-          const message = (error && error.message) || String(error || 'Unknown error');
-          appendClientLog('failure: ' + message);
-          showBanner('error', message);
+          const fullError = (error && error.stack)
+            ? String(error.stack)
+            : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
+          appendClientLog('[load] failure: ' + fullError);
+          showBanner('error', fullError);
           const tableBody = document.getElementById('dispatchTableBody');
           if (tableBody) {
             tableBody.innerHTML = '<tr><td colspan="7">Failed to load dashboard data.</td></tr>';
@@ -644,16 +695,17 @@ function getAdminDashboardData(token) {
         const dateText = dateValue instanceof Date
           ? dateValue.toISOString()
           : String(dateValue || '').trim();
+        const normalize = (value) => (value instanceof Date ? value.toISOString() : String(value || '').trim());
         return {
-          dispatch_id: String(row[headerMap.dispatch_id] || '').trim(),
+          dispatch_id: normalize(row[headerMap.dispatch_id]),
           date: dateText,
-          truck_numbers: String(row[headerMap.truck_numbers] || '').trim(),
-          client: String(row[headerMap.client] || '').trim(),
-          job_number: String(row[headerMap.job_number] || '').trim(),
-          start_time: String(row[headerMap.start_time] || '').trim(),
-          status: String(row[headerMap.status] || '').trim(),
-          doc_url: headerMap.doc_url !== undefined ? String(row[headerMap.doc_url] || '').trim() : '',
-          doc_id: headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : ''
+          truck_numbers: normalize(row[headerMap.truck_numbers]),
+          client: normalize(row[headerMap.client]),
+          job_number: normalize(row[headerMap.job_number]),
+          start_time: normalize(row[headerMap.start_time]),
+          status: normalize(row[headerMap.status]),
+          doc_url: headerMap.doc_url !== undefined ? normalize(row[headerMap.doc_url]) : '',
+          doc_id: headerMap.doc_id !== undefined ? normalize(row[headerMap.doc_id]) : ''
         };
       });
 
@@ -697,6 +749,30 @@ function renderAdminFallbackPage_(token, user, pageParam, error) {
   </style>
 </head>
 <body>
+  <div id="jsBoot" style="padding:6px;border:2px solid #000;display:inline-block;">JS BOOT PENDING</div>
+  <pre id="clientLog">No client log entries.</pre>
+  <pre id="clientErrors">No client errors.</pre>
+  <script>
+    try {
+      (function () {
+        var bootEl = document.getElementById('jsBoot');
+        if (bootEl) bootEl.textContent = 'JS BOOT OK';
+        var logEl = document.getElementById('clientLog');
+        if (logEl) {
+          var existing = String(logEl.textContent || '').trim();
+          var prefix = existing && existing !== 'No client log entries.' ? (existing + '\n') : '';
+          logEl.textContent = prefix + '[boot] script executed at ' + new Date().toISOString();
+        }
+      })();
+    } catch (bootError) {
+      var errorEl = document.getElementById('clientErrors');
+      if (errorEl) {
+        var prev = String(errorEl.textContent || '').trim();
+        var errorPrefix = prev && prev !== 'No client errors.' ? (prev + '\n') : '';
+        errorEl.textContent = errorPrefix + '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error'));
+      }
+    }
+  </script>
   <h1>ADMIN FALLBACK</h1>
   <section class="card">
     <div class="meta">
