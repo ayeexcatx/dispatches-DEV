@@ -243,11 +243,12 @@ function buildAdminHtml_(opts) {
     { id: 'source', label: 'Source' }
   ];
 
+  const baseUrl = ScriptApp.getService().getUrl();
   const navHtml = navItems.map((item) => {
     const activeClass = item.id === page ? 'active' : '';
     const paramsForLink = ['t=' + encodeURIComponent(token || '')];
     paramsForLink.push('p=' + encodeURIComponent(item.id));
-    const href = '?' + paramsForLink.join('&');
+    const href = baseUrl + '?' + paramsForLink.join('&');
     return `<a class="tab ${activeClass}" href="${href}">${item.label}</a>`;
   }).join('\n');
 
@@ -407,6 +408,23 @@ function buildAdminHtml_(opts) {
       el.textContent = appendLine(el.textContent, '[' + new Date().toISOString() + '] ' + String(message || 'log'), 'No client log entries.');
     }
 
+    (function patchEventPrototypeForTrace() {
+      if (window.__dispatchEventTracePatched) return;
+      window.__dispatchEventTracePatched = true;
+
+      const originalPreventDefault = Event.prototype.preventDefault;
+      Event.prototype.preventDefault = function () {
+        this.__pd = true;
+        return originalPreventDefault.apply(this, arguments);
+      };
+
+      const originalStopPropagation = Event.prototype.stopPropagation;
+      Event.prototype.stopPropagation = function () {
+        this.__sp = true;
+        return originalStopPropagation.apply(this, arguments);
+      };
+    })();
+
 
     window.onerror = function (message, source, lineno, colno, error) {
       const stack = error && error.stack ? ('\\n' + error.stack) : '';
@@ -422,10 +440,32 @@ function buildAdminHtml_(opts) {
     document.addEventListener('click', function (e) {
       const target = e && e.target ? e.target : null;
       if (!target) {
-        appendClientLog('[click] target=unknown id= class=');
+        appendClientLog('[click-trace] target=unknown id= class= href= defaultPrevented(before)=' + String(Boolean(e && e.defaultPrevented)) + ' pdFlag=' + String(Boolean(e && e.__pd)) + ' spFlag=' + String(Boolean(e && e.__sp)));
         return;
       }
-      appendClientLog('[click] target=' + String(target.tagName || 'unknown') + ' id=' + String(target.id || '') + ' class=' + String(target.className || ''));
+
+      const beforeDefaultPrevented = Boolean(e.defaultPrevented);
+      const anchor = target.closest ? target.closest('a.tab') : null;
+      const hrefAttr = anchor ? String(anchor.getAttribute('href') || anchor.href || '') : (target.getAttribute ? String(target.getAttribute('href') || '') : '');
+      appendClientLog('[click-trace] target=' + String(target.tagName || 'unknown') + ' id=' + String(target.id || '') + ' class=' + String(target.className || '') + ' href=' + hrefAttr + ' defaultPrevented(before)=' + String(beforeDefaultPrevented) + ' pdFlag=' + String(Boolean(e.__pd)) + ' spFlag=' + String(Boolean(e.__sp)));
+
+      if (anchor && hrefAttr.indexOf('?t=') !== -1 && hrefAttr.indexOf('&p=') !== -1 && document.title.indexOf('DEV') !== -1) {
+        appendClientLog('[nav-force] href=' + hrefAttr);
+        setTimeout(function () {
+          window.location.assign(hrefAttr);
+        }, 0);
+      }
+
+      const button = target.closest ? target.closest('button') : null;
+      if (button && button.closest && button.closest('#dispatchTableBody')) {
+        const onclickAttr = button.getAttribute ? button.getAttribute('onclick') : null;
+        const label = (button.textContent || '').trim();
+        appendClientLog('[dispatch-button] label=' + String(label) + ' hasOnclick=' + String(Boolean(onclickAttr)) + ' onclickAttr=' + String(onclickAttr || ''));
+      }
+
+      setTimeout(function () {
+        appendClientLog('[click-trace-post] target=' + String(target.tagName || 'unknown') + ' defaultPrevented(after)=' + String(Boolean(e.defaultPrevented)) + ' pdFlag=' + String(Boolean(e.__pd)) + ' spFlag=' + String(Boolean(e.__sp)));
+      }, 0);
     }, true);
 
     function forceSafeDebugBox(el) {
