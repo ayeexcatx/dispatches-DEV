@@ -35,6 +35,22 @@ function doGet(e) {
     isAdmin = isAdminOrDispatcherUser_(user);
     const shouldUseCompanyFallback = isDev && companyParam && (!token || !user);
 
+    if (pageParam === 'lite') {
+      p = 'lite';
+      if (!isAdmin) {
+        const unauthorizedHtml = 'not authorized';
+        logDoGet_(unauthorizedHtml.length);
+        return HtmlService.createHtmlOutput(unauthorizedHtml)
+          .setTitle('Not Authorized')
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      }
+      const liteHtml = '<!doctype html><html><body><div id="boot">PENDING</div><pre id="log">empty</pre><script>document.getElementById(\'boot\').textContent=\'OK\';document.getElementById(\'log\').textContent=\'script ran at \' + new Date().toISOString();</script></body></html>';
+      logDoGet_(liteHtml.length);
+      return HtmlService.createHtmlOutput(liteHtml)
+        .setTitle('Lite Test')
+        .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    }
+
     if (isAdmin) {
       const pageAliases = { 'create-dispatch': 'create', 'companies-trucks': 'companies' };
       const allowedPages = { dashboard: true, create: true, companies: true, users: true };
@@ -186,7 +202,8 @@ function buildAdminHtml_(opts) {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'create', label: 'Create Dispatch' },
     { id: 'companies', label: 'Companies/Trucks' },
-    { id: 'users', label: 'Users' }
+    { id: 'users', label: 'Users' },
+    { id: 'lite', label: 'Lite Test' }
   ];
 
   const navHtml = navItems.map((item) => {
