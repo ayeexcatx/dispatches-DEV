@@ -535,10 +535,6 @@ function buildAdminHtml_(opts) {
         .getAdminDashboardData(token);
     }
 
-    function navigateToPage(pageId) {
-      window.location.href = buildUrlWithParams({ t: TOKEN, p: pageId });
-    }
-
     function submitCreateDispatch(event) {
       event.preventDefault();
       const form = event.target;
