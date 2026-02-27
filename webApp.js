@@ -30,6 +30,14 @@ function doGet(e) {
   let content = '';
   let pageTitle = 'Dispatch List';
 
+  if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
+    content = buildAdminDashboardHtml_();
+    pageTitle = 'Admin Dispatch Dashboard';
+    return HtmlService.createHtmlOutput(content)
+      .setTitle(pageTitle)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
   if (!shouldUseCompanyFallback && user.truckNumber) {
     content = buildTruckScopedPortalHtml_(user.truckNumber);
     pageTitle = `${user.truckNumber} Dispatch List`;
@@ -57,6 +65,140 @@ function doGet(e) {
   return HtmlService.createHtmlOutput(content)
     .setTitle(pageTitle)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Determine whether a user should see the admin/dispatcher dashboard.
+ *
+ * @param {{role:string}|null} user - Active portal user.
+ * @returns {boolean} True when role is admin or dispatcher.
+ */
+function isAdminOrDispatcherUser_(user) {
+  if (!user) return false;
+  const role = String(user.role || '').trim().toLowerCase();
+  return role === 'admin' || role === 'dispatcher';
+}
+
+/**
+ * Build the Admin/Dispatcher dashboard HTML for active dispatches.
+ *
+ * @returns {string} Dashboard markup.
+ */
+function buildAdminDashboardHtml_() {
+  const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
+  if (!sheet || sheet.getLastRow() < 2) {
+    return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Admin Dispatch Dashboard</title></head>
+<body><h1>Admin Dispatch Dashboard</h1><p>No active dispatches found.</p></body></html>`;
+  }
+
+  const lastColumn = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(h => String(h || '').trim());
+  const headerMap = {};
+  headers.forEach((h, idx) => { if (h) headerMap[h] = idx; });
+
+  const requiredHeaders = ['dispatch_id', 'date', 'truck_numbers', 'client', 'job_number', 'start_time', 'status', 'doc_url'];
+  const missingHeader = requiredHeaders.find(name => headerMap[name] === undefined);
+  if (missingHeader) {
+    throw new Error(`Dispatches tab is missing required header: ${missingHeader}`);
+  }
+
+  const rows = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastColumn).getValues();
+  const activeRows = rows.filter(row => String(row[headerMap.status] || '').trim() !== 'Completed');
+
+  const tableRows = activeRows.map((row) => {
+    const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
+    const dateValue = row[headerMap.date];
+    const dateText = dateValue instanceof Date
+      ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
+      : String(dateValue || '').trim();
+    const truckNumbers = String(row[headerMap.truck_numbers] || '').trim();
+    const client = String(row[headerMap.client] || '').trim();
+    const jobNumber = String(row[headerMap.job_number] || '').trim();
+    const startTime = String(row[headerMap.start_time] || '').trim();
+    const status = String(row[headerMap.status] || '').trim();
+    const docUrl = String(row[headerMap.doc_url] || '').trim();
+
+    const viewAction = docUrl
+      ? `<button onclick="window.open('${docUrl}', '_blank')">View Dispatch</button>`
+      : '<button disabled>View Dispatch</button>';
+
+    return `<tr>
+      <td>${dateText}</td>
+      <td>${truckNumbers}</td>
+      <td>${client}</td>
+      <td>${jobNumber}</td>
+      <td>${startTime}</td>
+      <td>${status}</td>
+      <td>
+        ${viewAction}
+        <button onclick="markCompleted('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Mark Completed</button>
+        <button onclick="amendDispatch('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Amend</button>
+        <button onclick="cancelDispatch('${dispatchId}')" ${dispatchId ? '' : 'disabled'}>Cancel</button>
+      </td>
+    </tr>`;
+  }).join('\n');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Admin Dispatch Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; background: #f6f8fb; color: #222; }
+    h1 { margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; background: #fff; }
+    th, td { border: 1px solid #d9d9d9; padding: 10px; text-align: left; vertical-align: top; }
+    th { background: #eef3ff; }
+    .actions button { margin-right: 8px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Admin Dispatch Dashboard</h1>
+  <h2>Active Dispatches</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Truck Numbers</th>
+        <th>Client</th>
+        <th>Job Number</th>
+        <th>Start Time</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tableRows || '<tr><td colspan="7">No active dispatches found.</td></tr>'}
+    </tbody>
+  </table>
+  <script>
+    function markCompleted(dispatchId) {
+      if (!dispatchId) return;
+      google.script.run
+        .withSuccessHandler(function () { location.reload(); })
+        .withFailureHandler(function (error) { alert('Mark complete failed: ' + (error && error.message ? error.message : error)); })
+        .markDispatchCompleted(dispatchId);
+    }
+
+    function amendDispatch(dispatchId) {
+      if (!dispatchId) return;
+      google.script.run
+        .withSuccessHandler(function () { location.reload(); })
+        .withFailureHandler(function (error) { alert('Amend failed: ' + (error && error.message ? error.message : error)); })
+        .amendDispatch(dispatchId);
+    }
+
+    function cancelDispatch(dispatchId) {
+      if (!dispatchId) return;
+      google.script.run
+        .withSuccessHandler(function () { location.reload(); })
+        .withFailureHandler(function (error) { alert('Cancel failed: ' + (error && error.message ? error.message : error)); })
+        .cancelDispatch(dispatchId);
+    }
+  </script>
+</body>
+</html>`;
 }
 
 /**

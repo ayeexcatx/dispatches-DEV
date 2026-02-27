@@ -24,6 +24,7 @@ const DEV_SCHEMA_HEADERS = {
     'instructions',
     'truck_numbers',
     'status',
+    'last_updated_at',
     'doc_id',
     'doc_url',
     'last_confirmed_at',
@@ -186,6 +187,7 @@ function appendDispatchIndexRow_(row) {
     row.instructions,
     row.truckNumbers,
     row.status,
+    row.lastUpdatedAt,
     row.docId,
     row.docUrl,
     row.lastConfirmedAt,
@@ -289,6 +291,86 @@ function markDispatchConfirmed_(dispatchId) {
     status: currentStatus
   };
 }
+
+/**
+ * Update dispatch status and last_updated_at timestamp.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @param {string} status - New status value.
+ * @returns {{rowNumber:number,status:string}} Updated row metadata.
+ */
+function updateDispatchStatus_(dispatchId, status) {
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderIndexMap_(sheet);
+  const requiredHeaders = ['dispatch_id', 'status', 'last_updated_at'];
+
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Dispatches tab is missing required header: ${name}`);
+    }
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
+  }
+
+  const dispatchIdColumn = headerMap.dispatch_id + 1;
+  const values = sheet.getRange(2, dispatchIdColumn, lastRow - 1, 1).getValues();
+  const idx = values.findIndex((row) => String(row[0]) === dispatchId);
+
+  if (idx === -1) {
+    throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
+  }
+
+  const targetRow = idx + 2;
+  sheet.getRange(targetRow, headerMap.status + 1).setValue(status);
+  sheet.getRange(targetRow, headerMap.last_updated_at + 1).setValue(new Date());
+  return {
+    rowNumber: targetRow,
+    status: status
+  };
+}
+
+/**
+ * Mark one dispatch as completed from the admin dashboard.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @returns {{status:string,rowNumber:number}} Result payload.
+ */
+function markDispatchCompleted(dispatchId) {
+  ensureDevSchema_();
+  const update = updateDispatchStatus_(dispatchId, 'Completed');
+  log_(`Dispatch marked completed dispatch_id=${dispatchId} row=${update.rowNumber}`);
+  return { status: 'ok', rowNumber: update.rowNumber };
+}
+
+/**
+ * Mark one dispatch as amended from the admin dashboard.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @returns {{status:string,rowNumber:number}} Result payload.
+ */
+function amendDispatch(dispatchId) {
+  ensureDevSchema_();
+  const update = updateDispatchStatus_(dispatchId, 'Amended');
+  log_(`Dispatch marked amended dispatch_id=${dispatchId} row=${update.rowNumber}`);
+  return { status: 'ok', rowNumber: update.rowNumber };
+}
+
+/**
+ * Mark one dispatch as canceled from the admin dashboard.
+ *
+ * @param {string} dispatchId - Dispatch UUID.
+ * @returns {{status:string,rowNumber:number}} Result payload.
+ */
+function cancelDispatch(dispatchId) {
+  ensureDevSchema_();
+  const update = updateDispatchStatus_(dispatchId, 'Canceled');
+  log_(`Dispatch marked canceled dispatch_id=${dispatchId} row=${update.rowNumber}`);
+  return { status: 'ok', rowNumber: update.rowNumber };
+}
+
 
 /**
  * Convert a dispatch status into the confirmation type written to Confirmations.
@@ -578,6 +660,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       instructions: instructions,
       truckNumbers: assignedTruckNumbers,
       status: 'Dispatched',
+      lastUpdatedAt: new Date(),
       docId: archiveCopy.getId(),
       docUrl: archiveCopy.getUrl(),
       lastConfirmedAt: '',
