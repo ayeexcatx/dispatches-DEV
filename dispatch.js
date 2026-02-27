@@ -178,29 +178,28 @@ function ensureDevSchema_(opts) {
  */
 function appendDispatchIndexRow_(row) {
   const sheet = getSheet_('Dispatches');
-  const values = [[
-    row.dispatchId,
-    row.createdAt,
-    row.date,
-    row.shift,
-    row.client,
-    row.jobNumber,
-    row.startTime,
-    row.startLocation,
-    row.instructions,
-    row.truckNumbers,
-    row.status,
-    row.lastUpdatedAt,
-    row.lastUpdatedBy || '',
-    row.changeSummary || '',
-    row.cancelReason || '',
-    row.docId,
-    row.docUrl,
-    row.lastConfirmedAt,
-    row.isConfirmed
-  ]];
-
-  sheet.getRange(sheet.getLastRow() + 1, 1, 1, values[0].length).setValues(values);
+  const headerMap = getHeaderMap_(sheet);
+  appendDispatchRowByHeader_(sheet, headerMap, {
+    dispatch_id: row.dispatchId,
+    created_at: row.createdAt,
+    date: row.date,
+    shift: row.shift,
+    client: row.client,
+    job_number: row.jobNumber,
+    start_time: row.startTime,
+    start_location: row.startLocation,
+    instructions: row.instructions,
+    truck_numbers: row.truckNumbers,
+    status: row.status,
+    last_updated_at: row.lastUpdatedAt,
+    last_updated_by: row.lastUpdatedBy || '',
+    change_summary: row.changeSummary || '',
+    cancel_reason: row.cancelReason || '',
+    doc_id: row.docId,
+    doc_url: row.docUrl,
+    last_confirmed_at: row.lastConfirmedAt,
+    is_confirmed: row.isConfirmed
+  });
   log_(`Dispatches row write success dispatch_id=${row.dispatchId} doc_id=${row.docId} row=${sheet.getLastRow()}`);
 }
 
@@ -211,17 +210,77 @@ function appendDispatchIndexRow_(row) {
  * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - Sheet to inspect.
  * @returns {Object<string, number>} Header -> 0-based index map.
  */
-function getHeaderIndexMap_(sheet) {
+function getHeaderMap_(sheet) {
   const lastColumn = Math.max(1, sheet.getLastColumn());
   const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0];
   const map = {};
 
   headers.forEach((header, index) => {
     const key = String(header || '').trim();
-    if (key) map[key] = index;
+    if (key) map[key] = index + 1;
   });
 
   return map;
+}
+
+/**
+ * Read one row as an object keyed by header names.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} rowIndex
+ * @param {Object<string, number>} headerMap
+ * @returns {Object<string, *>}
+ */
+function getRowObject_(sheet, rowIndex, headerMap) {
+  const width = Math.max(sheet.getLastColumn(), Object.keys(headerMap || {}).length, 1);
+  const row = sheet.getRange(rowIndex, 1, 1, width).getValues()[0];
+  const obj = {};
+  Object.keys(headerMap || {}).forEach((header) => {
+    obj[header] = row[(headerMap[header] || 1) - 1];
+  });
+  return obj;
+}
+
+/**
+ * Update one row by header names.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {number} rowIndex
+ * @param {Object<string, number>} headerMap
+ * @param {Object<string, *>} updatesObject
+ */
+function setRowValuesByHeader_(sheet, rowIndex, headerMap, updatesObject) {
+  Object.keys(updatesObject || {}).forEach((header) => {
+    if (!headerMap[header]) return;
+    sheet.getRange(rowIndex, headerMap[header]).setValue(updatesObject[header]);
+  });
+}
+
+/**
+ * Append one Dispatches row by header names.
+ *
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {Object<string, number>} headerMap
+ * @param {Object<string, *>} dispatchObject
+ */
+function appendDispatchRowByHeader_(sheet, headerMap, dispatchObject) {
+  const width = Math.max(sheet.getLastColumn(), Object.keys(headerMap || {}).length, 1);
+  const row = new Array(width).fill('');
+  Object.keys(dispatchObject || {}).forEach((header) => {
+    const column = headerMap[header];
+    if (!column) return;
+    row[column - 1] = dispatchObject[header];
+  });
+  sheet.getRange(sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]);
+}
+
+function getHeaderIndexMap_(sheet) {
+  const oneBased = getHeaderMap_(sheet);
+  const zeroBased = {};
+  Object.keys(oneBased).forEach((key) => {
+    zeroBased[key] = oneBased[key] - 1;
+  });
+  return zeroBased;
 }
 
 /**
@@ -266,7 +325,7 @@ function getDispatchLookupByDocId_() {
  */
 function markDispatchConfirmed_(dispatchId) {
   const sheet = getSheet_('Dispatches');
-  const headerMap = getHeaderIndexMap_(sheet);
+  const headerMap = getHeaderMap_(sheet);
   const requiredHeaders = ['dispatch_id', 'status', 'last_confirmed_at', 'is_confirmed'];
 
   requiredHeaders.forEach((name) => {
@@ -280,18 +339,24 @@ function markDispatchConfirmed_(dispatchId) {
     throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
   }
 
-  const dispatchIdColumn = headerMap.dispatch_id + 1;
-  const values = sheet.getRange(2, dispatchIdColumn, lastRow - 1, 1).getValues();
-  const idx = values.findIndex(row => String(row[0]) === dispatchId);
+  let targetRow = -1;
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    if (String(rowObj.dispatch_id || '').trim() === dispatchId) {
+      targetRow = rowIndex;
+      break;
+    }
+  }
 
-  if (idx === -1) {
+  if (targetRow === -1) {
     throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
   }
 
-  const targetRow = idx + 2;
-  const currentStatus = String(sheet.getRange(targetRow, headerMap.status + 1).getValue() || '').trim();
-  sheet.getRange(targetRow, headerMap.last_confirmed_at + 1).setValue(new Date());
-  sheet.getRange(targetRow, headerMap.is_confirmed + 1).setValue(true);
+  const currentStatus = String(getRowObject_(sheet, targetRow, headerMap).status || '').trim();
+  setRowValuesByHeader_(sheet, targetRow, headerMap, {
+    last_confirmed_at: new Date().toISOString(),
+    is_confirmed: true
+  });
   return {
     rowNumber: targetRow,
     status: currentStatus
@@ -307,7 +372,7 @@ function markDispatchConfirmed_(dispatchId) {
  */
 function updateDispatchStatus_(dispatchId, status, opts) {
   const sheet = getSheet_('Dispatches');
-  const headerMap = getHeaderIndexMap_(sheet);
+  const headerMap = getHeaderMap_(sheet);
   const requiredHeaders = ['dispatch_id', 'status', 'last_updated_at'];
 
   requiredHeaders.forEach((name) => {
@@ -321,36 +386,37 @@ function updateDispatchStatus_(dispatchId, status, opts) {
     throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
   }
 
-  const dispatchIdColumn = headerMap.dispatch_id + 1;
-  const values = sheet.getRange(2, dispatchIdColumn, lastRow - 1, 1).getValues();
-  const idx = values.findIndex((row) => String(row[0]) === dispatchId);
+  let targetRow = -1;
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    if (String(rowObj.dispatch_id || '').trim() === dispatchId) {
+      targetRow = rowIndex;
+      break;
+    }
+  }
 
-  if (idx === -1) {
+  if (targetRow === -1) {
     throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
   }
 
-  const targetRow = idx + 2;
   const options = opts || {};
   const actor = String(options.updatedBy || '').trim();
   const changeSummary = String(options.changeSummary || '').trim();
   const cancelReason = String(options.cancelReason || '').trim();
 
-  sheet.getRange(targetRow, headerMap.status + 1).setValue(status);
-  sheet.getRange(targetRow, headerMap.last_updated_at + 1).setValue(new Date());
-  if (headerMap.last_updated_by !== undefined) {
-    sheet.getRange(targetRow, headerMap.last_updated_by + 1).setValue(actor);
-  }
-  if (headerMap.change_summary !== undefined) {
-    sheet.getRange(targetRow, headerMap.change_summary + 1).setValue(changeSummary);
-  }
-  if (headerMap.cancel_reason !== undefined) {
-    sheet.getRange(targetRow, headerMap.cancel_reason + 1).setValue(cancelReason);
-  }
+  const updates = {
+    status: status,
+    last_updated_at: new Date().toISOString(),
+    last_updated_by: actor,
+    change_summary: changeSummary,
+    cancel_reason: cancelReason
+  };
+
   if (status === 'Amended' || status === 'Canceled') {
-    if (headerMap.is_confirmed !== undefined) {
-      sheet.getRange(targetRow, headerMap.is_confirmed + 1).setValue(false);
-    }
+    updates.is_confirmed = false;
   }
+
+  setRowValuesByHeader_(sheet, targetRow, headerMap, updates);
 
   return {
     rowNumber: targetRow,
@@ -695,9 +761,10 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
     console.log(`Archive copy created successfully: ${newName}`);
 
     const dispatchId = newDispatchId_();
+    const docId = archiveCopy.getId();
     appendDispatchIndexRow_({
       dispatchId: dispatchId,
-      createdAt: new Date(),
+      createdAt: new Date().toISOString(),
       date: date,
       shift: shiftTime,
       client: company,
@@ -707,10 +774,10 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       instructions: instructions,
       truckNumbers: assignedTruckNumbers,
       status: 'Dispatched',
-      lastUpdatedAt: new Date(),
-      lastUpdatedBy: actorId,
-      docId: archiveCopy.getId(),
-      docUrl: archiveCopy.getUrl(),
+      lastUpdatedAt: new Date().toISOString(),
+      lastUpdatedBy: actorId || 'system',
+      docId: docId,
+      docUrl: `https://docs.google.com/document/d/${docId}/edit`,
       lastConfirmedAt: '',
       isConfirmed: false
     });
@@ -1313,4 +1380,99 @@ function repairUsersHeader_DEV_() {
 
 function runRepairUsersHeader() {
   repairUsersHeader_DEV_();
+}
+
+/**
+ * Validate a Google Docs document ID.
+ *
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isValidDocId_(value) {
+  return /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
+}
+
+/**
+ * Parse a Google Docs document ID from a URL.
+ *
+ * @param {string} url
+ * @returns {string}
+ */
+function parseDocIdFromUrl_(url) {
+  const match = String(url || '').match(/docs\.google\.com\/document\/d\/([A-Za-z0-9_-]{21,})/i);
+  return match ? match[1] : '';
+}
+
+/**
+ * One-time DEV migration to repair Dispatches doc_id/doc_url fields.
+ *
+ * @returns {{scanned:number,updated:number,movedFromLastUpdatedBy:number,synthesizedFromDocId:number,overwroteInvalidDocUrl:number}}
+ */
+function repairDispatchDocLinks_DEV_() {
+  ensureDevSchema_();
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderMap_(sheet);
+  const requiredHeaders = ['doc_id', 'doc_url', 'last_updated_by'];
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Dispatches tab is missing required header: ${name}`);
+    }
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return { scanned: 0, updated: 0, movedFromLastUpdatedBy: 0, synthesizedFromDocId: 0, overwroteInvalidDocUrl: 0 };
+  }
+
+  const stats = { scanned: lastRow - 1, updated: 0, movedFromLastUpdatedBy: 0, synthesizedFromDocId: 0, overwroteInvalidDocUrl: 0 };
+
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const row = getRowObject_(sheet, rowIndex, headerMap);
+    const currentDocId = String(row.doc_id || '').trim();
+    const currentDocUrl = String(row.doc_url || '').trim();
+    const currentLastUpdatedBy = String(row.last_updated_by || '').trim();
+
+    const updates = {};
+    let effectiveDocId = currentDocId;
+    let effectiveDocUrl = currentDocUrl;
+
+    const docUrlLooksValid = /docs\.google\.com\/document\/d\//i.test(currentDocUrl);
+    const legacyUrlInActor = /docs\.google\.com\/document\/d\//i.test(currentLastUpdatedBy);
+
+    if ((!currentDocUrl || !docUrlLooksValid) && legacyUrlInActor) {
+      const parsedFromActorUrl = parseDocIdFromUrl_(currentLastUpdatedBy);
+      updates.doc_url = currentLastUpdatedBy;
+      effectiveDocUrl = currentLastUpdatedBy;
+      if (parsedFromActorUrl) {
+        updates.doc_id = parsedFromActorUrl;
+        effectiveDocId = parsedFromActorUrl;
+      }
+      updates.last_updated_by = 'legacy-system';
+      stats.movedFromLastUpdatedBy += 1;
+    }
+
+    const docIdToUse = isValidDocId_(effectiveDocId) ? effectiveDocId : '';
+    const canonicalDocUrl = docIdToUse ? `https://docs.google.com/document/d/${docIdToUse}/edit` : '';
+
+    if (docIdToUse && (!effectiveDocUrl || !/https?:\/\//i.test(effectiveDocUrl))) {
+      updates.doc_url = canonicalDocUrl;
+      stats.synthesizedFromDocId += 1;
+    }
+
+    if (docIdToUse && effectiveDocUrl && !/https?:\/\//i.test(effectiveDocUrl)) {
+      updates.doc_url = canonicalDocUrl;
+      stats.overwroteInvalidDocUrl += 1;
+    }
+
+    if (Object.keys(updates).length) {
+      if (headerMap.last_updated_at !== undefined) {
+        updates.last_updated_at = new Date().toISOString();
+      }
+      setRowValuesByHeader_(sheet, rowIndex, headerMap, updates);
+      stats.updated += 1;
+    }
+  }
+
+  log_(`repairDispatchDocLinks_DEV_ scanned=${stats.scanned} updated=${stats.updated}`);
+  return stats;
 }

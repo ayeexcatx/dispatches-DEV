@@ -32,6 +32,14 @@ function doGet(e) {
     let pageTitle = 'Dispatch List';
 
     if (!shouldUseCompanyFallback && isAdminOrDispatcherUser_(user)) {
+      const pageParam = String((e && e.parameter && e.parameter.p) || '').trim().toLowerCase();
+      if (pageParam === 'repair') {
+        repairDispatchDocLinks_DEV_();
+        return HtmlService.createHtmlOutput('<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>')
+          .setTitle('Repairing Dispatch Links')
+          .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+      }
+
       content = buildAdminDashboardHtml_(user, token, e && e.parameter);
       pageTitle = 'Admin Dispatch Dashboard';
       return HtmlService.createHtmlOutput(content)
@@ -105,7 +113,8 @@ function buildAdminDashboardHtml_(user, token, params) {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
-    create_ok: { kind: 'success', text: 'Dispatch created successfully.' }
+    create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
+    repair_done: { kind: 'success', text: 'Dispatch doc links repair completed.' }
   };
   const notice = notices[messageParam] || null;
 
@@ -217,6 +226,9 @@ function buildAdminDashboardHtml_(user, token, params) {
 
       pageContent = `
         <h2>Active Dispatches</h2>
+        <div class="form-actions" style="margin: 0 0 12px;">
+          <button onclick="repairDocLinks()">Repair Doc Links</button>
+        </div>
         <table>
           <thead>
             <tr>
@@ -361,6 +373,19 @@ function buildAdminDashboardHtml_(user, token, params) {
       }
       console.log('Opening dispatch doc URL', { dispatchId: dispatchId, docUrl: docUrl, docId: docId, finalUrl: finalUrl });
       window.open(finalUrl, '_blank', 'noopener');
+    }
+
+
+    function repairDocLinks() {
+      if (!window.confirm('Run one-time repair for legacy doc links?')) return;
+      google.script.run
+        .withSuccessHandler(function () {
+          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'repair_done' });
+        })
+        .withFailureHandler(function (error) {
+          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+        })
+        .repairDispatchDocLinksFromDashboard(TOKEN);
     }
 
     function markCompleted(dispatchId) {
@@ -556,6 +581,18 @@ function createDispatchFromDashboard(token, payload) {
   const actor = getAuthorizedDashboardActor_(token);
   createDispatchFromPortalForm(payload, actor.userId || actor.displayName || 'unknown');
   return { status: 'ok' };
+}
+
+
+/**
+ * Dashboard action: run legacy doc-link repair (admin/dispatcher only).
+ *
+ * @param {string} token - Portal token.
+ * @returns {{scanned:number,updated:number,movedFromLastUpdatedBy:number,synthesizedFromDocId:number,overwroteInvalidDocUrl:number}}
+ */
+function repairDispatchDocLinksFromDashboard(token) {
+  getAuthorizedDashboardActor_(token);
+  return repairDispatchDocLinks_DEV_();
 }
 
 /**
