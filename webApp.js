@@ -115,7 +115,11 @@ function doGet(e) {
       if (pageParam === 'repair') {
         p = 'repair';
         repairDispatchDocLinks_DEV_();
-        const repairHtml = '<script>window.location.replace("?t=' + encodeURIComponent(token) + '&p=dashboard&msg=repair_done");</script>';
+        const baseUrl = ScriptApp.getService().getUrl();
+        const repairUrl = baseUrl
+          + '?t=' + encodeURIComponent(token)
+          + '&p=dashboard&msg=repair_done';
+        const repairHtml = '<script>window.location.replace(' + JSON.stringify(repairUrl) + ');</script>';
         logDoGet_(repairHtml.length);
         return HtmlService.createHtmlOutput(repairHtml)
           .setTitle('Repairing Dispatch Links');
@@ -249,7 +253,7 @@ function buildAdminHtml_(opts) {
     const paramsForLink = ['t=' + encodeURIComponent(token || '')];
     paramsForLink.push('p=' + encodeURIComponent(item.id));
     const href = baseUrl + '?' + paramsForLink.join('&');
-    return `<a class="tab ${activeClass}" href="${href}">${item.label}</a>`;
+    return `<a class="tab ${activeClass}" target="_top" href="${href}">${item.label}</a>`;
   }).join('\n');
 
   let pageContent = '';
@@ -385,6 +389,7 @@ function buildAdminHtml_(opts) {
   ${pageContent}
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
+    const APP_BASE_URL = ${JSON.stringify(baseUrl || '')};
     const INITIAL_NOTICE = ${JSON.stringify(notice)};
     const INITIAL_ERROR = ${JSON.stringify(errorParam)};
     const CURRENT_PAGE = ${JSON.stringify(page)};
@@ -446,13 +451,26 @@ function buildAdminHtml_(opts) {
 
       const beforeDefaultPrevented = Boolean(e.defaultPrevented);
       const anchor = target.closest ? target.closest('a.tab') : null;
-      const hrefAttr = anchor ? String(anchor.getAttribute('href') || anchor.href || '') : (target.getAttribute ? String(target.getAttribute('href') || '') : '');
+      const hrefAttr = anchor ? String(anchor.getAttribute('href') || '') : (target.getAttribute ? String(target.getAttribute('href') || '') : '');
+      const absoluteHref = anchor ? String(anchor.href || '') : '';
       appendClientLog('[click-trace] target=' + String(target.tagName || 'unknown') + ' id=' + String(target.id || '') + ' class=' + String(target.className || '') + ' href=' + hrefAttr + ' defaultPrevented(before)=' + String(beforeDefaultPrevented) + ' pdFlag=' + String(Boolean(e.__pd)) + ' spFlag=' + String(Boolean(e.__sp)));
 
-      if (anchor && hrefAttr.indexOf('?t=') !== -1 && hrefAttr.indexOf('&p=') !== -1 && document.title.indexOf('DEV') !== -1) {
-        appendClientLog('[nav-force] href=' + hrefAttr);
+      if (anchor && absoluteHref) {
+        appendClientLog('[nav-force] assign=' + absoluteHref);
         setTimeout(function () {
-          window.location.assign(hrefAttr);
+          const beforeHref = String(window.location.href || '');
+          try {
+            window.location.assign(absoluteHref);
+          } catch (assignError) {
+            appendClientLog('[nav-force] assign error=' + String(assignError && assignError.message ? assignError.message : assignError));
+          }
+          window.setTimeout(function () {
+            const afterHref = String(window.location.href || '');
+            if (afterHref === beforeHref) {
+              appendClientLog('[nav-fallback] opening _top');
+              window.open(absoluteHref, '_top');
+            }
+          }, 300);
         }, 0);
       }
 
@@ -524,7 +542,7 @@ function buildAdminHtml_(opts) {
     }
 
     function buildUrlWithParams(values) {
-      const base = window.location.pathname;
+      const base = APP_BASE_URL || window.location.href.split('?')[0];
       const params = new URLSearchParams();
       Object.keys(values || {}).forEach(function (key) {
         const value = values[key];
@@ -812,6 +830,7 @@ function escapeHtmlForPre_(value) {
  * @returns {string} Safe HTML markup.
  */
 function renderSafeAdminPage_(token) {
+  const baseUrl = ScriptApp.getService().getUrl();
   return `<!doctype html>
 <html>
 <head>
@@ -820,13 +839,13 @@ function renderSafeAdminPage_(token) {
 </head>
 <body>
   <nav>
-    <a href="?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=users">Users</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=lite">Lite Test</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=safe">Safe</a>
-    <a href="?t=${encodeURIComponent(token || '')}&p=source">Source</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=dashboard">Dashboard</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=users">Users</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=lite">Lite Test</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=safe">Safe</a>
+    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=source">Source</a>
   </nav>
   <h1>SAFE DASHBOARD</h1>
   <pre id="out">loading...</pre>
