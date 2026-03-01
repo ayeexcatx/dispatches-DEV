@@ -359,6 +359,35 @@ function getCompanyForTruck_(truckNumber) {
   }
   return '';
 }
+
+
+/**
+ * DEV sanity check for duplicate dispatch IDs.
+ */
+function assertUniqueDispatchIds_() {
+  if (ENV !== 'DEV') return;
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderMap_(sheet);
+  if (headerMap.dispatch_id === undefined) return;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const seen = {};
+  const duplicates = [];
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const value = String(sheet.getRange(rowIndex, headerMap.dispatch_id).getValue() || '').trim();
+    if (!value) continue;
+    if (seen[value]) {
+      duplicates.push({ dispatchId: value, row: rowIndex, firstRow: seen[value] });
+    } else {
+      seen[value] = rowIndex;
+    }
+  }
+
+  if (duplicates.length) {
+    log_('Duplicate dispatch_id values detected: ' + JSON.stringify(duplicates));
+  }
+}
 function appendDispatchIndexRow_(row) {
   const sheet = getSheet_('Dispatches');
   const headerMap = getHeaderMap_(sheet);
@@ -1024,7 +1053,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
     archiveDoc.saveAndClose(); // Save all archive changes to Drive.
     console.log(`Archive copy created successfully: ${newName}`);
 
-    const dispatchId = String((e && e.dispatchId) || '').trim() || newDispatchId_();
+    const dispatchId = newDispatchId_();
     const docId = archiveCopy.getId();
     appendDispatchIndexRow_({
       dispatchId: dispatchId,
@@ -1049,6 +1078,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       lastConfirmedAt: '',
       isConfirmed: false
     });
+    createNotificationsForDispatch_(dispatchId, [truckNumber], 'dispatched_created', `Dispatched job ${jobNumber} created for ${truckNumber}`);
   } catch (error) {
     console.error("Error creating archive copy:", error); // If archive creation fails, write the error to logs for troubleshooting.
   }
@@ -1178,6 +1208,8 @@ if (companyName) {
 }
 
 }); // Finished processing all selected trucks.
+
+  assertUniqueDispatchIds_();
 } // End of the form submit workflow.
 
 
@@ -1186,7 +1218,7 @@ if (companyName) {
  *
  * @param {Object} payload
  * @param {string=} actorId
- * @returns {{status:string,dispatchId:string,mode:string}}
+ * @returns {{status:string,mode:string}}
  */
 function createDispatchFromPortalForm(payload, actorId) {
   ensureDevSchema_();
@@ -1239,9 +1271,7 @@ function createDispatchFromPortalForm(payload, actorId) {
     if (missing) throw new Error(`Missing required dispatch field: ${missing}`);
   }
 
-  const dispatchId = newDispatchId_();
   const baseRow = {
-    dispatchId: dispatchId,
     createdAt: createdAt,
     date: String(safePayload.date || '').trim(),
     shift: String(safePayload.shift || '').trim(),
@@ -1267,9 +1297,14 @@ function createDispatchFromPortalForm(payload, actorId) {
   };
 
   if (isConfirmedMode) {
-    appendDispatchIndexRow_(baseRow);
-    createNotificationsForDispatch_(dispatchId, truckNumbers, 'confirmed_created', `Confirmed dispatch created for ${truckNumbers.join(', ')}`);
-    return { status: 'ok', dispatchId: dispatchId, mode: mode };
+    const confirmedDispatchId = newDispatchId_();
+    appendDispatchIndexRow_({
+      ...baseRow,
+      dispatchId: confirmedDispatchId
+    });
+    createNotificationsForDispatch_(confirmedDispatchId, truckNumbers, 'confirmed_created', `Confirmed dispatch created for ${truckNumbers.join(', ')}`);
+    assertUniqueDispatchIds_();
+    return { status: 'ok', mode: mode };
   }
 
   const formValues = [];
@@ -1291,19 +1326,8 @@ function createDispatchFromPortalForm(payload, actorId) {
   formValues[14] = second.start_location || '';
   formValues[15] = second.instructions || '';
 
-  onFormSubmit({ values: formValues, actorId: updatedBy, dispatchId: dispatchId, clientName: baseRow.clientName, assignmentsJson: baseRow.assignmentsJson });
-
-  const record = getDispatchRecordById_(dispatchId);
-  setRowValuesByHeader_(record.sheet, record.rowNumber, record.headerMap, {
-    notes: baseRow.notes,
-    tolls_policy: baseRow.tollsPolicy,
-    assignments_json: baseRow.assignmentsJson,
-    client_name: baseRow.clientName,
-    status: 'Dispatched'
-  });
-
-  createNotificationsForDispatch_(dispatchId, truckNumbers, 'dispatched_created', `Dispatched job ${baseRow.jobNumber} created for ${truckNumbers.join(', ')}`);
-  return { status: 'ok', dispatchId: dispatchId, mode: mode };
+  onFormSubmit({ values: formValues, actorId: updatedBy, clientName: baseRow.clientName, assignmentsJson: baseRow.assignmentsJson });
+  return { status: 'ok', mode: mode };
 }
 
 /**

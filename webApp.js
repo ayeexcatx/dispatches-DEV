@@ -1594,7 +1594,8 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       host.innerHTML = items.map(function (n) {
         const unread = n.is_read ? '' : ' <strong>(unread)</strong>';
         const link = n.dispatch_id ? ('?t=' + encodeURIComponent(TOKEN) + '&dispatch_id=' + encodeURIComponent(n.dispatch_id)) : '#';
-        return '<div class="dispatch-block"><a href="' + link + '">' + n.message + '</a>' + unread + ' <button type="button" onclick="markRead('' + n.notification_id + '')">Mark read</button></div>';
+        const notificationId = String(n.notification_id || '');
+        return '<div class="dispatch-block"><a href="' + link + '">' + n.message + '</a>' + unread + ' <button type="button" class="notifReadBtn" data-notification-id="' + notificationId + '">Mark read</button></div>';
       }).join('');
     }
 
@@ -1608,7 +1609,15 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
         .getMyNotifications(TOKEN);
     }
 
+
+    document.addEventListener('click', function (e) {
+      const btn = e && e.target && e.target.closest ? e.target.closest('.notifReadBtn') : null;
+      if (!btn) return;
+      markRead(String(btn.dataset.notificationId || '').trim());
+    }, true);
+
     function markRead(notificationId) {
+      if (!notificationId) return;
       google.script.run
         .withSuccessHandler(function () { loadNotifications(); })
         .withFailureHandler(function () {})
