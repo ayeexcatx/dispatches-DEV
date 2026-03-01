@@ -474,11 +474,82 @@ function buildAdminHtml_(opts) {
         }, 0);
       }
 
-      const button = target.closest ? target.closest('button') : null;
-      if (button && button.closest && button.closest('#dispatchTableBody')) {
-        const onclickAttr = button.getAttribute ? button.getAttribute('onclick') : null;
-        const label = (button.textContent || '').trim();
-        appendClientLog('[dispatch-button] label=' + String(label) + ' hasOnclick=' + String(Boolean(onclickAttr)) + ' onclickAttr=' + String(onclickAttr || ''));
+      const actionButton = target.closest ? target.closest('button.actionBtn') : null;
+      if (actionButton) {
+        const action = String(actionButton.dataset.action || '').trim();
+        const dispatchId = String(actionButton.dataset.dispatchId || '').trim();
+        const docUrl = String(actionButton.dataset.docUrl || '').trim();
+        const docId = String(actionButton.dataset.docId || '').trim();
+
+        appendClientLog('[action-click] ' + action + ' id=' + dispatchId);
+        if (!dispatchId) {
+          appendClientError('[action-click] missing dispatchId for action=' + action, 'action-click');
+        }
+
+        switch (action) {
+          case 'view': {
+            const finalUrl = resolveDispatchDocUrl(docUrl, docId);
+            if (!finalUrl) {
+              showBanner('error', 'No document is linked for this dispatch.');
+              return;
+            }
+            window.open(finalUrl, '_blank', 'noopener');
+            return;
+          }
+          case 'complete': {
+            if (!dispatchId) return;
+            google.script.run
+              .withSuccessHandler(function () {
+                showBanner('success', 'Dispatch marked completed.');
+                loadDashboardData(TOKEN);
+              })
+              .withFailureHandler(function (error) {
+                showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+              })
+              .markDispatchCompletedFromDashboard(TOKEN, dispatchId);
+            return;
+          }
+          case 'amend': {
+            if (!dispatchId) return;
+            const summary = window.prompt('Enter amendment summary:');
+            if (summary === null) return;
+            if (!String(summary || '').trim()) {
+              showBanner('error', 'Amendment summary is required.');
+              return;
+            }
+            google.script.run
+              .withSuccessHandler(function () {
+                showBanner('success', 'Dispatch amended.');
+                loadDashboardData(TOKEN);
+              })
+              .withFailureHandler(function (error) {
+                showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+              })
+              .amendDispatchFromDashboard(TOKEN, dispatchId, summary);
+            return;
+          }
+          case 'cancel': {
+            if (!dispatchId) return;
+            const reason = window.prompt('Enter cancellation reason:');
+            if (reason === null) return;
+            if (!String(reason || '').trim()) {
+              showBanner('error', 'Cancellation reason is required.');
+              return;
+            }
+            google.script.run
+              .withSuccessHandler(function () {
+                showBanner('success', 'Dispatch canceled.');
+                loadDashboardData(TOKEN);
+              })
+              .withFailureHandler(function (error) {
+                showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+              })
+              .cancelDispatchFromDashboard(TOKEN, dispatchId, reason);
+            return;
+          }
+          default:
+            return;
+        }
       }
 
       setTimeout(function () {
@@ -590,6 +661,7 @@ function buildAdminHtml_(opts) {
 
       if (!dispatches.length) {
         tableBody.innerHTML = '<tr><td colspan="7">No active dispatches found.</td></tr>';
+        appendClientLog('[render] buttons view=0 complete=0 amend=0 cancel=0 disabledView=0 disabledTotal=0');
         return;
       }
 
@@ -607,13 +679,33 @@ function buildAdminHtml_(opts) {
           '<td>' + escapeHtml(dispatch.start_time) + '</td>' +
           '<td>' + escapeHtml(dispatch.status) + '</td>' +
           '<td class="actions">' +
-            '<button type="button" onclick="viewDispatch(' + JSON.stringify(dispatchId) + ', ' + JSON.stringify(encodeURIComponent(docUrl)) + ', ' + JSON.stringify(encodeURIComponent(docId)) + ')" ' + ((dispatchId && hasLinkedDoc) ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
-            '<button type="button" onclick="markCompleted(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Mark Completed</button>' +
-            '<button type="button" onclick="amendDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Amend</button>' +
-            '<button type="button" onclick="cancelDispatchAction(' + JSON.stringify(dispatchId) + ')" ' + (dispatchId ? '' : 'disabled') + '>Cancel</button>' +
+            '<button type="button" class="actionBtn" data-action="view" data-dispatch-id="' + escapeHtml(dispatchId) + '" data-doc-url="' + escapeHtml(docUrl) + '" data-doc-id="' + escapeHtml(docId) + '" ' + (hasLinkedDoc ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
+            '<button type="button" class="actionBtn" data-action="complete" data-dispatch-id="' + escapeHtml(dispatchId) + '" ' + (dispatchId ? '' : 'disabled') + '>Mark Completed</button>' +
+            '<button type="button" class="actionBtn" data-action="amend" data-dispatch-id="' + escapeHtml(dispatchId) + '" ' + (dispatchId ? '' : 'disabled') + '>Amend</button>' +
+            '<button type="button" class="actionBtn" data-action="cancel" data-dispatch-id="' + escapeHtml(dispatchId) + '" ' + (dispatchId ? '' : 'disabled') + '>Cancel</button>' +
           '</td>' +
         '</tr>';
       }).join('');
+
+      const actionButtons = tableBody.querySelectorAll('button.actionBtn');
+      const actionCounts = { view: 0, complete: 0, amend: 0, cancel: 0 };
+      let disabledViewCount = 0;
+      let disabledTotalCount = 0;
+
+      Array.prototype.forEach.call(actionButtons, function (button) {
+        const action = String((button && button.dataset && button.dataset.action) || '').trim();
+        if (Object.prototype.hasOwnProperty.call(actionCounts, action)) {
+          actionCounts[action] += 1;
+        }
+        if (button && button.disabled) {
+          disabledTotalCount += 1;
+          if (action === 'view') {
+            disabledViewCount += 1;
+          }
+        }
+      });
+
+      appendClientLog('[render] buttons view=' + actionCounts.view + ' complete=' + actionCounts.complete + ' amend=' + actionCounts.amend + ' cancel=' + actionCounts.cancel + ' disabledView=' + disabledViewCount + ' disabledTotal=' + disabledTotalCount);
     }
 
     function loadDashboardData(token) {
@@ -708,19 +800,6 @@ function buildAdminHtml_(opts) {
       return '';
     }
 
-    function viewDispatch(dispatchId, encodedDocUrl, encodedDocId) {
-      const docUrl = decodeURIComponent(encodedDocUrl || '');
-      const docId = decodeURIComponent(encodedDocId || '');
-      const finalUrl = resolveDispatchDocUrl(docUrl, docId);
-      if (!finalUrl) {
-        showBanner('error', 'No document is linked for this dispatch.');
-        return;
-      }
-      console.log('Opening dispatch doc URL', { dispatchId: dispatchId, docUrl: docUrl, docId: docId, finalUrl: finalUrl });
-      window.open(finalUrl, '_blank', 'noopener');
-    }
-
-
     function repairDocLinks() {
       if (!window.confirm('Run one-time repair for legacy doc links?')) return;
       google.script.run
@@ -732,57 +811,6 @@ function buildAdminHtml_(opts) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
         })
         .repairDispatchDocLinksFromDashboard(TOKEN);
-    }
-
-    function markCompleted(dispatchId) {
-      if (!dispatchId) return;
-      google.script.run
-        .withSuccessHandler(function () {
-          showBanner('success', 'Dispatch marked completed.');
-          loadDashboardData(TOKEN);
-        })
-        .withFailureHandler(function (error) {
-          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
-        })
-        .markDispatchCompletedFromDashboard(TOKEN, dispatchId);
-    }
-
-    function amendDispatchAction(dispatchId) {
-      if (!dispatchId) return;
-      const summary = window.prompt('Enter amendment summary:');
-      if (summary === null) return;
-      if (!String(summary || '').trim()) {
-        showBanner('error', 'Amendment summary is required.');
-        return;
-      }
-      google.script.run
-        .withSuccessHandler(function () {
-          showBanner('success', 'Dispatch amended.');
-          loadDashboardData(TOKEN);
-        })
-        .withFailureHandler(function (error) {
-          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
-        })
-        .amendDispatchFromDashboard(TOKEN, dispatchId, summary);
-    }
-
-    function cancelDispatchAction(dispatchId) {
-      if (!dispatchId) return;
-      const reason = window.prompt('Enter cancellation reason:');
-      if (reason === null) return;
-      if (!String(reason || '').trim()) {
-        showBanner('error', 'Cancellation reason is required.');
-        return;
-      }
-      google.script.run
-        .withSuccessHandler(function () {
-          showBanner('success', 'Dispatch canceled.');
-          loadDashboardData(TOKEN);
-        })
-        .withFailureHandler(function (error) {
-          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
-        })
-        .cancelDispatchFromDashboard(TOKEN, dispatchId, reason);
     }
 
     (function updateHtmlSize() {
