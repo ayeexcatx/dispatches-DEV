@@ -4,6 +4,8 @@
 
 // Main Drive folder where company dispatch HTML files are stored.
 const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
+const DEV_DEBUG = isDevEnvironment_();
+const SHOW_REPAIR_BUTTON = false;
 
 /**
  * Handle a web request and return the matching scoped dispatch page.
@@ -236,15 +238,14 @@ function buildAdminHtml_(opts) {
   const renderTimestamp = new Date().toISOString();
   const debugRole = String((user && user.role) || '').trim() || 'unknown';
   const debugTokenPresent = token ? 'yes' : 'no';
+  const showDebugUi = DEV_DEBUG;
+  const showRepairButton = DEV_DEBUG || SHOW_REPAIR_BUTTON;
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'create', label: 'Create Dispatch' },
     { id: 'companies', label: 'Companies/Trucks' },
-    { id: 'users', label: 'Users' },
-    { id: 'lite', label: 'Lite Test' },
-    { id: 'safe', label: 'Safe' },
-    { id: 'source', label: 'Source' }
+    { id: 'users', label: 'Users' }
   ];
 
   const baseUrl = ScriptApp.getService().getUrl();
@@ -301,9 +302,7 @@ function buildAdminHtml_(opts) {
   } else {
     pageContent = `
       <h2 id="dashboardTitle">dashboard</h2>
-      <div class="form-actions" style="margin: 0 0 12px;">
-        <button type="button" onclick="repairDocLinks()">Repair Doc Links</button>
-      </div>
+      ${showRepairButton ? `<div class="form-actions" style="margin: 0 0 12px;"><button type="button" onclick="repairDocLinks()">Repair Doc Links</button></div>` : ''}
       <table>
         <thead>
           <tr>
@@ -350,13 +349,17 @@ function buildAdminHtml_(opts) {
     .debug-strip code { background: #fff; border: 1px solid #ead69b; border-radius: 3px; padding: 1px 4px; }
     #clientErrors { margin-top: 8px; background: #fff; border: 1px solid #ead69b; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; position: static; pointer-events: none; z-index: 0; max-height: 160px; overflow: auto; }
     #clientLog { margin-top: 8px; background: #f3f7ff; border: 1px solid #bcd2ff; border-radius: 4px; padding: 8px; white-space: pre-wrap; min-height: 24px; position: static; pointer-events: none; z-index: 0; max-height: 160px; overflow: auto; }
+    details.errors-box { margin-top: 8px; }
+    details.errors-box > summary { cursor: pointer; font-weight: 600; }
     nav.tabs, .tabs a, button { pointer-events: auto; position: relative; z-index: 10; }
   </style>
 </head>
 <body>
-  <div id="jsBoot" style="padding:6px;border:2px solid #000;display:inline-block;">JS BOOT PENDING</div>
-  <pre id="clientLog">No client log entries.</pre>
-  <pre id="clientErrors">No client errors.</pre>
+  ${showDebugUi ? '<div id="jsBoot" style="padding:6px;border:2px solid #000;display:inline-block;">JS BOOT PENDING</div>' : ''}
+  ${showDebugUi ? '<pre id="clientLog">No client log entries.</pre>' : ''}
+  ${showDebugUi
+    ? '<pre id="clientErrors">No client errors.</pre>'
+    : '<details class="errors-box"><summary>Errors</summary><pre id="clientErrors">No client errors.</pre></details>'}
   <script>
     function appendLine(existing, line, emptySentinel) {
       var cur = String(existing || '').trim();
@@ -381,9 +384,7 @@ function buildAdminHtml_(opts) {
     }
   </script>
   <h1>CCG Dispatch DEV — Admin</h1>
-  <section class="debug-strip" id="debugStrip">
-    <strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code>
-  </section>
+  ${showDebugUi ? `<section class="debug-strip" id="debugStrip"><strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code></section>` : ''}
   <div id="statusBanner" class="banner"></div>
   <nav class="tabs">${navHtml}</nav>
   ${pageContent}
@@ -394,6 +395,7 @@ function buildAdminHtml_(opts) {
     const INITIAL_ERROR = ${JSON.stringify(errorParam)};
     const CURRENT_PAGE = ${JSON.stringify(page)};
     const SERVER_RENDER_ID = ${JSON.stringify(renderId)};
+    const DEV_DEBUG = ${JSON.stringify(showDebugUi)};
 
     function appendLine(existing, line, emptySentinel) {
       const cur = String(existing || '').trim();
@@ -408,6 +410,7 @@ function buildAdminHtml_(opts) {
     }
 
     function appendClientLog(message) {
+      if (!DEV_DEBUG) return;
       const el = document.getElementById('clientLog');
       if (!el) return;
       el.textContent = appendLine(el.textContent, '[' + new Date().toISOString() + '] ' + String(message || 'log'), 'No client log entries.');
@@ -871,9 +874,6 @@ function renderSafeAdminPage_(token) {
     <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=create">Create Dispatch</a>
     <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=companies">Companies/Trucks</a>
     <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=users">Users</a>
-    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=lite">Lite Test</a>
-    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=safe">Safe</a>
-    <a href="${baseUrl}?t=${encodeURIComponent(token || '')}&p=source">Source</a>
   </nav>
   <h1>SAFE DASHBOARD</h1>
   <pre id="out">loading...</pre>
