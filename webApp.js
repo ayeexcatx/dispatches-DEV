@@ -93,7 +93,7 @@ function doGet(e) {
 
     if (isAdmin) {
       const pageAliases = { 'create-dispatch': 'create', 'companies-trucks': 'companies' };
-      const allowedPages = { dashboard: true, create: true, companies: true, users: true };
+      const allowedPages = { dashboard: true, create: true, edit: true, companies: true, users: true };
       p = pageAliases[p] || p;
       if (!allowedPages[p]) p = 'dashboard';
     }
@@ -150,7 +150,7 @@ function doGet(e) {
     }
 
     if (!shouldUseCompanyFallback && user.truckNumber) {
-      content = buildTruckScopedPortalHtml_(user.truckNumber);
+      content = buildTruckScopedPortalHtml_(user.truckNumber, token);
       pageTitle = `${user.truckNumber} Dispatch List`;
     } else {
       const resolvedCompany = shouldUseCompanyFallback ? companyParam : user.company;
@@ -222,7 +222,7 @@ function buildAdminHtml_(opts) {
     'create-dispatch': 'create',
     'companies-trucks': 'companies'
   };
-  const allowedPages = { dashboard: true, create: true, companies: true, users: true };
+  const allowedPages = { dashboard: true, create: true, edit: true, companies: true, users: true };
   let page = forcedPage || pageAliases[pageParamRaw] || pageParamRaw || 'dashboard';
   if (!allowedPages[page]) page = 'dashboard';
 
@@ -259,41 +259,59 @@ function buildAdminHtml_(opts) {
 
   let pageContent = '';
 
-  if (page === 'create') {
+  if (page === 'create' || page === 'edit') {
+    const editDispatchId = String((params && params.dispatch_id) || '').trim();
+    const editRecord = page === 'edit' && editDispatchId ? getDispatchForDashboardEdit(token, editDispatchId) : null;
+    const initialMode = editRecord ? 'edit' : 'create';
+    const initialPayload = editRecord || null;
     pageContent = `
-      <h2>Create Dispatch</h2>
+      <h2>${page === 'edit' ? 'Edit Dispatch' : 'Create Dispatch'}</h2>
       <section class="card page-shell">
-        <p>Create Dispatch page.</p>
-        <form id="createDispatchForm" onsubmit="submitCreateDispatch(event)">
+        <form id="createDispatchForm" data-form-mode="${initialMode}" data-dispatch-id="${editDispatchId}" onsubmit="submitCreateDispatch(event)">
+        <label>Status
+          <select name="status" id="statusField" required>
+            <option value="Confirmed">Confirmed</option>
+            <option value="Dispatched">Dispatched</option>
+          </select>
+        </label>
         <label>Date
           <input type="date" name="date" required>
         </label>
         <label>Shift
-          <input type="text" name="shift" placeholder="e.g. 6:00 AM" required>
+          <select name="shift" required>
+            <option value="">Select shift</option>
+            <option value="day">day</option>
+            <option value="night">night</option>
+          </select>
         </label>
         <label>Client
-          <input type="text" name="client" required>
+          <input type="text" name="client">
         </label>
-        <label>Job Number
-          <input type="text" name="jobNumber" required>
-        </label>
-        <label>Start Time
-          <input type="text" name="startTime" placeholder="e.g. 7:30 AM" required>
-        </label>
-        <label>Start Location
-          <input type="text" name="startLocation" required>
-        </label>
-        <label>Instructions
-          <textarea name="instructions" rows="4" required></textarea>
-        </label>
+        <div id="assignmentBlocks"></div>
+        <button type="button" onclick="addAssignmentBlock()">Add Assignment</button>
         <label>Truck Numbers (comma-separated)
           <input type="text" name="truckNumbers" placeholder="RT03, RT12" required>
         </label>
+        <label>Tolls Policy
+          <select name="tollsPolicy">
+            <option value="">Select</option>
+            <option value="included">included</option>
+            <option value="authorized">authorized</option>
+            <option value="unauthorized">unauthorized</option>
+          </select>
+        </label>
+        <label>Notes
+          <textarea name="notes" rows="3"></textarea>
+        </label>
+        <label id="changeSummaryWrap" style="display:none;">Change Summary
+          <textarea name="changeSummary" rows="3"></textarea>
+        </label>
         <div class="form-actions">
-          <button type="submit">Create Dispatch</button>
+          <button type="submit">${page === 'edit' ? 'Save Dispatch' : 'Create Dispatch'}</button>
         </div>
         </form>
       </section>
+      <script>window.__INITIAL_DISPATCH_PAYLOAD__ = ${JSON.stringify(initialPayload)};</script>
     `;
   } else if (page === 'companies') {
     pageContent = '<h2>companies</h2><section class="card page-shell"><p>Companies/Trucks placeholder content.</p></section>';
@@ -382,6 +400,8 @@ function buildAdminHtml_(opts) {
         errorEl.textContent = appendLine(errorEl.textContent, '[boot] ' + (bootError && bootError.message ? bootError.message : String(bootError || 'Unknown boot error')), 'No client errors.');
       }
     }
+
+    loadNotifications();
   </script>
   <h1>CCG Dispatch DEV — Admin</h1>
   ${showDebugUi ? `<section class="debug-strip" id="debugStrip"><strong>Debug</strong> — p: <code>${page || 'dashboard'}</code> | token: <code>${debugTokenPresent}</code> | role: <code>${debugRole}</code> | ts: <code>${renderTimestamp}</code> | renderId: <code>${renderId}</code> | htmlSize: <code id="htmlSizeValue">pending</code></section>` : ''}
@@ -514,21 +534,7 @@ function buildAdminHtml_(opts) {
           }
           case 'amend': {
             if (!dispatchId) return;
-            const summary = window.prompt('Enter amendment summary:');
-            if (summary === null) return;
-            if (!String(summary || '').trim()) {
-              showBanner('error', 'Amendment summary is required.');
-              return;
-            }
-            google.script.run
-              .withSuccessHandler(function () {
-                showBanner('success', 'Dispatch amended.');
-                loadDashboardData(TOKEN);
-              })
-              .withFailureHandler(function (error) {
-                showBanner('error', (error && error.message) || String(error || 'Unknown error'));
-              })
-              .amendDispatchFromDashboard(TOKEN, dispatchId, summary);
+            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'edit', dispatch_id: dispatchId });
             return;
           }
           case 'cancel': {
@@ -753,23 +759,114 @@ function buildAdminHtml_(opts) {
         .getAdminDashboardData(token);
     }
 
+
+    function assignmentTemplate(index, value) {
+      var v = value || {};
+      return '<fieldset class="assignment-block" data-assignment-index="' + index + '">'
+        + '<legend>Assignment ' + (index + 1) + '</legend>'
+        + '<label>Job Number<input type="text" name="assignment_jobNumber_' + index + '" value="' + escapeHtml(String(v.job_number || v.jobNumber || '')) + '"></label>'
+        + '<label>Start Time<input type="text" name="assignment_startTime_' + index + '" value="' + escapeHtml(String(v.start_time || v.startTime || '')) + '"></label>'
+        + '<label>Start Location<textarea name="assignment_startLocation_' + index + '" rows="2">' + escapeHtml(String(v.start_location || v.startLocation || '')) + '</textarea></label>'
+        + '<label>Instructions<textarea name="assignment_instructions_' + index + '" rows="3">' + escapeHtml(String(v.instructions || '')) + '</textarea></label>'
+        + '<label>Notes<textarea name="assignment_notes_' + index + '" rows="2">' + escapeHtml(String(v.notes || '')) + '</textarea></label>'
+        + '</fieldset>';
+    }
+
+    function addAssignmentBlock(value) {
+      var container = document.getElementById('assignmentBlocks');
+      if (!container) return;
+      var index = container.querySelectorAll('.assignment-block').length;
+      container.insertAdjacentHTML('beforeend', assignmentTemplate(index, value));
+    }
+
+    function hydrateCreateOrEditForm() {
+      var form = document.getElementById('createDispatchForm');
+      if (!form) return;
+      var payload = window.__INITIAL_DISPATCH_PAYLOAD__ || null;
+      addAssignmentBlock();
+      if (!payload) return;
+      form.elements.status.value = payload.status || 'Dispatched';
+      form.elements.date.value = payload.date || '';
+      form.elements.shift.value = payload.shift || '';
+      form.elements.client.value = payload.client || '';
+      form.elements.truckNumbers.value = payload.truck_numbers || '';
+      form.elements.tollsPolicy.value = payload.tolls_policy || '';
+      form.elements.notes.value = payload.notes || '';
+      var blocks = document.getElementById('assignmentBlocks');
+      if (blocks) blocks.innerHTML = '';
+      var assignments = Array.isArray(payload.assignments) && payload.assignments.length ? payload.assignments : [{
+        job_number: payload.job_number || '',
+        start_time: payload.start_time || '',
+        start_location: payload.start_location || '',
+        instructions: payload.instructions || '',
+        notes: payload.notes || ''
+      }];
+      assignments.forEach(function (a) { addAssignmentBlock(a); });
+      var summaryWrap = document.getElementById('changeSummaryWrap');
+      if (summaryWrap) summaryWrap.style.display = 'block';
+    }
+
+    function collectAssignments(formData) {
+      var assignments = [];
+      var index = 0;
+      while (formData.has('assignment_jobNumber_' + index) || formData.has('assignment_startTime_' + index) || formData.has('assignment_startLocation_' + index)) {
+        assignments.push({
+          jobNumber: String(formData.get('assignment_jobNumber_' + index) || '').trim(),
+          startTime: String(formData.get('assignment_startTime_' + index) || '').trim(),
+          startLocation: String(formData.get('assignment_startLocation_' + index) || '').trim(),
+          instructions: String(formData.get('assignment_instructions_' + index) || '').trim(),
+          notes: String(formData.get('assignment_notes_' + index) || '').trim()
+        });
+        index += 1;
+      }
+      return assignments;
+    }
+
     function submitCreateDispatch(event) {
       event.preventDefault();
       const form = event.target;
       const formData = new FormData(form);
+      const assignments = collectAssignments(formData);
       const payload = {
+        status: String(formData.get('status') || '').trim(),
         date: String(formData.get('date') || '').trim(),
         shift: String(formData.get('shift') || '').trim(),
         client: String(formData.get('client') || '').trim(),
-        jobNumber: String(formData.get('jobNumber') || '').trim(),
-        startTime: String(formData.get('startTime') || '').trim(),
-        startLocation: String(formData.get('startLocation') || '').trim(),
-        instructions: String(formData.get('instructions') || '').trim(),
-        truckNumbers: String(formData.get('truckNumbers') || '').trim()
+        jobNumber: String((assignments[0] && assignments[0].jobNumber) || '').trim(),
+        startTime: String((assignments[0] && assignments[0].startTime) || '').trim(),
+        startLocation: String((assignments[0] && assignments[0].startLocation) || '').trim(),
+        instructions: String((assignments[0] && assignments[0].instructions) || '').trim(),
+        notes: String(formData.get('notes') || '').trim(),
+        tollsPolicy: String(formData.get('tollsPolicy') || '').trim(),
+        truckNumbers: String(formData.get('truckNumbers') || '').trim(),
+        assignments: assignments,
+        changeSummary: String(formData.get('changeSummary') || '').trim()
       };
 
-      if (!payload.date || !payload.shift || !payload.client || !payload.jobNumber || !payload.startTime || !payload.startLocation || !payload.instructions || !payload.truckNumbers) {
-        showBanner('error', 'All fields are required.');
+      if (!payload.date || !payload.shift || !payload.truckNumbers) {
+        showBanner('error', 'Date, shift, and truck numbers are required.');
+        return;
+      }
+      if (payload.status === 'Dispatched' && (!payload.client || !payload.jobNumber || !payload.startTime || !payload.startLocation || !payload.instructions)) {
+        showBanner('error', 'Dispatched requires client and assignment details.');
+        return;
+      }
+
+      const mode = String(form.dataset.formMode || 'create').trim();
+      const dispatchId = String(form.dataset.dispatchId || '').trim();
+      if (mode === 'edit') {
+        if (!payload.changeSummary) {
+          showBanner('error', 'Amendment change summary is required.');
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(function () {
+            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'amend_ok' });
+          })
+          .withFailureHandler(function (error) {
+            showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+          })
+          .saveDispatchEditFromDashboard(TOKEN, dispatchId, payload);
         return;
       }
 
@@ -826,6 +923,9 @@ function buildAdminHtml_(opts) {
 
     if (CURRENT_PAGE === 'dashboard') {
       loadDashboardData(TOKEN);
+    }
+    if (CURRENT_PAGE === 'create' || CURRENT_PAGE === 'edit') {
+      hydrateCreateOrEditForm();
     }
   </script>
 </body>
@@ -1222,6 +1322,57 @@ function createDispatchFromDashboard(token, payload) {
 
 
 /**
+ * Dashboard action: load one dispatch for edit form.
+ *
+ * @param {string} token
+ * @param {string} dispatchId
+ * @returns {Object}
+ */
+function getDispatchForDashboardEdit(token, dispatchId) {
+  getAuthorizedDashboardActor_(token);
+  return getDispatchById_(dispatchId);
+}
+
+/**
+ * Dashboard action: save full dispatch edits.
+ *
+ * @param {string} token
+ * @param {string} dispatchId
+ * @param {Object} payload
+ * @returns {{status:string,rowNumber:number}}
+ */
+function saveDispatchEditFromDashboard(token, dispatchId, payload) {
+  const actor = getAuthorizedDashboardActor_(token);
+  const updatedBy = actor.userId || actor.displayName || 'unknown';
+  return saveDispatchEdit(dispatchId, payload, updatedBy);
+}
+
+/**
+ * Read current user notifications.
+ *
+ * @param {string} token
+ * @returns {Array<Object>}
+ */
+function getMyNotifications(token) {
+  const actor = getActivePortalUserByToken_(String(token || '').trim());
+  if (!actor) throw new Error('Unauthorized.');
+  return getNotificationsForUser(actor.userId);
+}
+
+/**
+ * Mark one notification as read.
+ *
+ * @param {string} token
+ * @param {string} notificationId
+ * @returns {{status:string}}
+ */
+function markMyNotificationRead(token, notificationId) {
+  const actor = getActivePortalUserByToken_(String(token || '').trim());
+  if (!actor) throw new Error('Unauthorized.');
+  return markNotificationRead(notificationId, actor.userId);
+}
+
+/**
  * Dashboard action: run legacy doc-link repair (admin/dispatcher only).
  *
  * @param {string} token - Portal token.
@@ -1238,7 +1389,7 @@ function repairDispatchDocLinksFromDashboard(token) {
  * @param {string} truckNumber - Truck identity to keep in rendered blocks.
  * @returns {string} Filtered portal HTML.
  */
-function buildTruckScopedPortalHtml_(truckNumber) {
+function buildTruckScopedPortalHtml_(truckNumber, token) {
   const sheet = SpreadsheetApp.openById(DEV_DB_SPREADSHEET_ID).getSheetByName('Dispatches');
   if (!sheet || sheet.getLastRow() < 2) {
     return renderNoDispatchesHtml_(truckNumber);
@@ -1425,7 +1576,54 @@ function buildTruckScopedPortalHtml_(truckNumber) {
     ${pastHTML || '<p>No past dispatches.</p>'}
   </div>
 
+  <div class="section">
+    <h2>Notifications</h2>
+    <div id="notificationsList"><p>Loading notifications...</p></div>
+  </div>
+
   <script>
+    const TOKEN = ${JSON.stringify(token || '')};
+
+    function renderNotifications(items) {
+      const host = document.getElementById('notificationsList');
+      if (!host) return;
+      if (!items || !items.length) {
+        host.innerHTML = '<p>No notifications.</p>';
+        return;
+      }
+      host.innerHTML = items.map(function (n) {
+        const unread = n.is_read ? '' : ' <strong>(unread)</strong>';
+        const link = n.dispatch_id ? ('?t=' + encodeURIComponent(TOKEN) + '&dispatch_id=' + encodeURIComponent(n.dispatch_id)) : '#';
+        const notificationId = String(n.notification_id || '');
+        return '<div class="dispatch-block"><a href="' + link + '">' + n.message + '</a>' + unread + ' <button type="button" class="notifReadBtn" data-notification-id="' + notificationId + '">Mark read</button></div>';
+      }).join('');
+    }
+
+    function loadNotifications() {
+      google.script.run
+        .withSuccessHandler(function (items) { renderNotifications(items || []); })
+        .withFailureHandler(function () {
+          const host = document.getElementById('notificationsList');
+          if (host) host.innerHTML = '<p>Failed to load notifications.</p>';
+        })
+        .getMyNotifications(TOKEN);
+    }
+
+
+    document.addEventListener('click', function (e) {
+      const btn = e && e.target && e.target.closest ? e.target.closest('.notifReadBtn') : null;
+      if (!btn) return;
+      markRead(String(btn.dataset.notificationId || '').trim());
+    }, true);
+
+    function markRead(notificationId) {
+      if (!notificationId) return;
+      google.script.run
+        .withSuccessHandler(function () { loadNotifications(); })
+        .withFailureHandler(function () {})
+        .markMyNotificationRead(TOKEN, notificationId);
+    }
+
     function confirmReceipt(buttonEl) {
       const dispatchId = buttonEl.getAttribute('data-dispatch-id');
       const truckNumber = buttonEl.getAttribute('data-truck-number');

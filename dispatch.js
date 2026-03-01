@@ -18,10 +18,14 @@ const DEV_SCHEMA_HEADERS = {
     'date',
     'shift',
     'client',
+    'client_name',
     'job_number',
     'start_time',
     'start_location',
     'instructions',
+    'notes',
+    'tolls_policy',
+    'assignments_json',
     'truck_numbers',
     'status',
     'last_updated_at',
@@ -32,6 +36,16 @@ const DEV_SCHEMA_HEADERS = {
     'doc_url',
     'last_confirmed_at',
     'is_confirmed'
+  ],
+  Notifications: [
+    'notification_id',
+    'created_at',
+    'recipient_user_id',
+    'dispatch_id',
+    'type',
+    'message',
+    'is_read',
+    'read_at'
   ],
   Trucks: [
     'truckNumber',
@@ -176,6 +190,204 @@ function ensureDevSchema_(opts) {
  *
  * @param {Object} row - Dispatch row values.
  */
+
+
+/**
+ * Build a unique notification ID.
+ *
+ * @returns {string}
+ */
+function newNotificationId_() {
+  return Utilities.getUuid();
+}
+
+/**
+ * Split truck numbers from comma/space separated text.
+ *
+ * @param {string} raw
+ * @returns {string[]}
+ */
+function parseTruckNumbers_(raw) {
+  return String(raw || '')
+    .split(/[\s,]+/)
+    .map((truck) => String(truck || '').trim())
+    .filter(Boolean);
+}
+
+/**
+ * Return active users that should receive dispatch notifications.
+ *
+ * @param {string[]} truckNumbers
+ * @returns {Array<{userId:string,displayName:string,role:string,company:string,truckNumber:string}>}
+ */
+function getNotificationRecipientsForDispatch_(truckNumbers) {
+  const sheet = getSheet_('Users');
+  const headerMap = getHeaderMap_(sheet);
+  const requiredHeaders = ['user_id', 'display_name', 'role', 'company', 'truck_number', 'is_active'];
+  requiredHeaders.forEach((name) => {
+    if (headerMap[name] === undefined) {
+      throw new Error(`[${ENV}] Users tab is missing required header: ${name}`);
+    }
+  });
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+
+  const normalizedTrucks = (truckNumbers || []).map((truck) => String(truck || '').trim()).filter(Boolean);
+  const truckSet = {};
+  normalizedTrucks.forEach((truck) => { truckSet[truck] = true; });
+
+  const recipientsByUserId = {};
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    const activeRaw = rowObj.is_active;
+    const isActive = activeRaw === true || String(activeRaw || '').toUpperCase() === 'TRUE';
+    if (!isActive) continue;
+
+    const role = String(rowObj.role || '').trim().toLowerCase();
+    const userId = String(rowObj.user_id || '').trim();
+    if (!userId) continue;
+
+    const truckNumber = String(rowObj.truck_number || '').trim();
+    const company = String(rowObj.company || '').trim();
+
+    const isTruckRecipient = truckNumber && truckSet[truckNumber];
+    const isCompanyOwner = role === 'company_owner' && company;
+
+    let include = isTruckRecipient;
+    if (!include && isCompanyOwner) {
+      include = normalizedTrucks.some((truck) => {
+        return normalizedTrucks.indexOf(truck) !== -1 && company && getCompanyForTruck_(truck) === company;
+      });
+    }
+
+    if (!include) continue;
+
+    recipientsByUserId[userId] = {
+      userId: userId,
+      displayName: String(rowObj.display_name || '').trim(),
+      role: String(rowObj.role || '').trim(),
+      company: company,
+      truckNumber: truckNumber
+    };
+  }
+
+  return Object.keys(recipientsByUserId).map((userId) => recipientsByUserId[userId]);
+}
+
+/**
+ * Add notification rows for one dispatch event.
+ *
+ * @param {string} dispatchId
+ * @param {string[]} truckNumbers
+ * @param {string} type
+ * @param {string} message
+ */
+function createNotificationsForDispatch_(dispatchId, truckNumbers, type, message) {
+  const recipients = getNotificationRecipientsForDispatch_(truckNumbers);
+  if (!recipients.length) return;
+
+  const sheet = getSheet_('Notifications');
+  const headerMap = getHeaderMap_(sheet);
+  recipients.forEach((recipient) => {
+    appendDispatchRowByHeader_(sheet, headerMap, {
+      notification_id: newNotificationId_(),
+      created_at: new Date().toISOString(),
+      recipient_user_id: recipient.userId,
+      dispatch_id: dispatchId,
+      type: type,
+      message: message,
+      is_read: false,
+      read_at: ''
+    });
+  });
+}
+
+/**
+ * Add one confirmation history row.
+ *
+ * @param {string} dispatchId
+ * @param {string} truckNumber
+ * @param {string} confirmationType
+ * @param {string} confirmedBy
+ */
+function appendConfirmationHistory_(dispatchId, truckNumber, confirmationType, confirmedBy) {
+  const confirmationSheet = getSheet_('Confirmations');
+  confirmationSheet.appendRow([
+    dispatchId,
+    truckNumber,
+    confirmationType,
+    new Date().toISOString(),
+    confirmedBy || 'unknown'
+  ]);
+}
+
+/**
+ * Find one dispatch row by dispatch_id.
+ *
+ * @param {string} dispatchId
+ * @returns {{sheet:GoogleAppsScript.Spreadsheet.Sheet,rowNumber:number,headerMap:Object<string,number>,rowObject:Object<string,*>}}
+ */
+function getDispatchRecordById_(dispatchId) {
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderMap_(sheet);
+  const lastRow = sheet.getLastRow();
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    if (String(rowObj.dispatch_id || '').trim() === String(dispatchId || '').trim()) {
+      return { sheet: sheet, rowNumber: rowIndex, headerMap: headerMap, rowObject: rowObj };
+    }
+  }
+  throw new Error(`[${ENV}] Dispatch record not found for dispatch_id=${dispatchId}`);
+}
+
+/**
+ * Map truck to company.
+ *
+ * @param {string} truckNumber
+ * @returns {string}
+ */
+function getCompanyForTruck_(truckNumber) {
+  const sheet = getSheet_('Trucks');
+  const headerMap = getHeaderMap_(sheet);
+  const lastRow = sheet.getLastRow();
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    if (String(rowObj.truckNumber || '').trim() === String(truckNumber || '').trim()) {
+      return String(rowObj.company || '').trim();
+    }
+  }
+  return '';
+}
+
+
+/**
+ * DEV sanity check for duplicate dispatch IDs.
+ */
+function assertUniqueDispatchIds_() {
+  if (ENV !== 'DEV') return;
+  const sheet = getSheet_('Dispatches');
+  const headerMap = getHeaderMap_(sheet);
+  if (headerMap.dispatch_id === undefined) return;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const seen = {};
+  const duplicates = [];
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const value = String(sheet.getRange(rowIndex, headerMap.dispatch_id).getValue() || '').trim();
+    if (!value) continue;
+    if (seen[value]) {
+      duplicates.push({ dispatchId: value, row: rowIndex, firstRow: seen[value] });
+    } else {
+      seen[value] = rowIndex;
+    }
+  }
+
+  if (duplicates.length) {
+    log_('Duplicate dispatch_id values detected: ' + JSON.stringify(duplicates));
+  }
+}
 function appendDispatchIndexRow_(row) {
   const sheet = getSheet_('Dispatches');
   const headerMap = getHeaderMap_(sheet);
@@ -185,10 +397,14 @@ function appendDispatchIndexRow_(row) {
     date: row.date,
     shift: row.shift,
     client: row.client,
+    client_name: row.clientName || row.client,
     job_number: row.jobNumber,
     start_time: row.startTime,
     start_location: row.startLocation,
     instructions: row.instructions,
+    notes: row.notes || '',
+    tolls_policy: row.tollsPolicy || '',
+    assignments_json: row.assignmentsJson || '[]',
     truck_numbers: row.truckNumbers,
     status: row.status,
     last_updated_at: row.lastUpdatedAt,
@@ -457,6 +673,9 @@ function amendDispatch(dispatchId, changeSummary, updatedBy) {
     updatedBy: updatedBy,
     changeSummary: summary
   });
+  const record = getDispatchRecordById_(dispatchId);
+  const trucks = parseTruckNumbers_(record.rowObject.truck_numbers);
+  createNotificationsForDispatch_(dispatchId, trucks, 'amended', `Dispatch amended: ${summary}`);
   log_(`Dispatch marked amended dispatch_id=${dispatchId} row=${update.rowNumber}`);
   return { status: 'ok', rowNumber: update.rowNumber };
 }
@@ -479,6 +698,9 @@ function cancelDispatch(dispatchId, cancelReason, updatedBy) {
     changeSummary: `Canceled: ${reason}`,
     cancelReason: reason
   });
+  const record = getDispatchRecordById_(dispatchId);
+  const trucks = parseTruckNumbers_(record.rowObject.truck_numbers);
+  createNotificationsForDispatch_(dispatchId, trucks, 'canceled', `Dispatch canceled: ${reason}`);
   log_(`Dispatch marked canceled dispatch_id=${dispatchId} row=${update.rowNumber}`);
   return { status: 'ok', rowNumber: update.rowNumber };
 }
@@ -491,9 +713,12 @@ function cancelDispatch(dispatchId, cancelReason, updatedBy) {
  * @returns {string} Confirmation type for Confirmations tab.
  */
 function getConfirmationTypeForStatus_(status) {
-  if (status === 'Amended') return 'Amendment';
-  if (status === 'Canceled') return 'Cancellation';
-  return 'Dispatch';
+  if (status === 'Amended') return 'amended';
+  if (status === 'Canceled') return 'canceled';
+  if (status === 'Confirmed') return 'confirmed';
+  if (status === 'Dispatched') return 'dispatched';
+  if (status === 'Completed') return 'completed';
+  return 'dispatch';
 }
 
 /**
@@ -506,23 +731,15 @@ function getConfirmationTypeForStatus_(status) {
 function confirmDispatchReceipt(dispatchId, truckNumber) {
   ensureDevSchema_();
 
-  const confirmationSheet = getSheet_('Confirmations');
-  const timestamp = new Date();
   const activeUserEmail = Session.getActiveUser().getEmail();
   const confirmedBy = activeUserEmail || 'unknown';
 
   const dispatchUpdate = markDispatchConfirmed_(dispatchId);
   const confirmationType = getConfirmationTypeForStatus_(dispatchUpdate.status);
 
-  confirmationSheet.appendRow([
-    dispatchId,
-    truckNumber,
-    confirmationType,
-    timestamp,
-    confirmedBy
-  ]);
+  appendConfirmationHistory_(dispatchId, truckNumber, confirmationType, confirmedBy);
 
-  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmation_type=${confirmationType} confirmations_row=${confirmationSheet.getLastRow()} dispatches_row=${dispatchUpdate.rowNumber}`);
+  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmation_type=${confirmationType} dispatches_row=${dispatchUpdate.rowNumber}`);
 
   return { status: 'ok' };
 }
@@ -568,6 +785,82 @@ function formatInsertedTitleParagraph(body, assignmentNumber) {
   }
 }
 
+
+
+/**
+ * Load dispatch for edit page.
+ *
+ * @param {string} dispatchId
+ * @returns {Object}
+ */
+function getDispatchById_(dispatchId) {
+  const record = getDispatchRecordById_(dispatchId);
+  const row = record.rowObject;
+  let assignments = [];
+  try {
+    assignments = JSON.parse(String(row.assignments_json || '[]'));
+  } catch (error) {
+    assignments = [];
+  }
+  return {
+    dispatch_id: String(row.dispatch_id || '').trim(),
+    date: String(row.date || '').trim(),
+    shift: String(row.shift || '').trim(),
+    client: String(row.client || '').trim(),
+    client_name: String(row.client_name || row.client || '').trim(),
+    job_number: String(row.job_number || '').trim(),
+    start_time: String(row.start_time || '').trim(),
+    start_location: String(row.start_location || '').trim(),
+    instructions: String(row.instructions || '').trim(),
+    notes: String(row.notes || '').trim(),
+    tolls_policy: String(row.tolls_policy || '').trim(),
+    truck_numbers: String(row.truck_numbers || '').trim(),
+    status: String(row.status || '').trim(),
+    assignments: assignments
+  };
+}
+
+/**
+ * Save edits on an existing dispatch row.
+ *
+ * @param {string} dispatchId
+ * @param {Object} payload
+ * @param {string} updatedBy
+ * @returns {{status:string,rowNumber:number}}
+ */
+function saveDispatchEdit(dispatchId, payload, updatedBy) {
+  ensureDevSchema_();
+  const summary = String((payload && payload.changeSummary) || '').trim();
+  if (!summary) throw new Error('Amendment change summary is required.');
+
+  const record = getDispatchRecordById_(dispatchId);
+  const truckNumbers = parseTruckNumbers_(payload && payload.truckNumbers ? payload.truckNumbers : record.rowObject.truck_numbers);
+  const assignments = Array.isArray(payload && payload.assignments) ? payload.assignments : [];
+
+  const updates = {
+    date: String((payload && payload.date) || record.rowObject.date || '').trim(),
+    shift: String((payload && payload.shift) || record.rowObject.shift || '').trim(),
+    client: String((payload && payload.client) || record.rowObject.client || '').trim(),
+    client_name: String((payload && (payload.clientName || payload.client)) || record.rowObject.client_name || record.rowObject.client || '').trim(),
+    job_number: String((payload && payload.jobNumber) || record.rowObject.job_number || '').trim(),
+    start_time: String((payload && payload.startTime) || record.rowObject.start_time || '').trim(),
+    start_location: String((payload && payload.startLocation) || record.rowObject.start_location || '').trim(),
+    instructions: String((payload && payload.instructions) || record.rowObject.instructions || '').trim(),
+    notes: String((payload && payload.notes) || record.rowObject.notes || '').trim(),
+    tolls_policy: String((payload && payload.tollsPolicy) || record.rowObject.tolls_policy || '').trim(),
+    assignments_json: JSON.stringify(assignments),
+    truck_numbers: truckNumbers.join(', '),
+    status: 'Amended',
+    is_confirmed: false,
+    change_summary: summary,
+    last_updated_at: new Date().toISOString(),
+    last_updated_by: String(updatedBy || '').trim() || 'unknown'
+  };
+
+  setRowValuesByHeader_(record.sheet, record.rowNumber, record.headerMap, updates);
+  createNotificationsForDispatch_(dispatchId, truckNumbers, 'amended', `Dispatch amended: ${summary}`);
+  return { status: 'ok', rowNumber: record.rowNumber };
+}
 /**
  * This runs automatically each time someone submits the dispatch form.
  *
@@ -768,10 +1061,14 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       date: date,
       shift: shiftTime,
       client: company,
+      clientName: String((e && e.clientName) || company || '').trim(),
       jobNumber: jobNumber,
       startTime: startTime,
       startLocation: startLocation,
       instructions: instructions,
+      notes: String(notes || '').trim(),
+      tollsPolicy: String(tolls || '').trim(),
+      assignmentsJson: String((e && e.assignmentsJson) || '[]'),
       truckNumbers: assignedTruckNumbers,
       status: 'Dispatched',
       lastUpdatedAt: new Date().toISOString(),
@@ -781,6 +1078,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       lastConfirmedAt: '',
       isConfirmed: false
     });
+    createNotificationsForDispatch_(dispatchId, [truckNumber], 'dispatched_created', `Dispatched job ${jobNumber} created for ${truckNumber}`);
   } catch (error) {
     console.error("Error creating archive copy:", error); // If archive creation fails, write the error to logs for troubleshooting.
   }
@@ -910,43 +1208,130 @@ if (companyName) {
 }
 
 }); // Finished processing all selected trucks.
+
+  assertUniqueDispatchIds_();
 } // End of the form submit workflow.
 
 
 /**
- * Create dispatch rows/documents using the same legacy form-submit flow.
+ * Create dispatch rows/documents for Confirmed or Dispatched workflows.
  *
- * @param {{date:string,shift:string,client:string,jobNumber:string,startTime:string,startLocation:string,instructions:string,truckNumbers:string}} payload
+ * @param {Object} payload
  * @param {string=} actorId
+ * @returns {{status:string,mode:string}}
  */
 function createDispatchFromPortalForm(payload, actorId) {
+  ensureDevSchema_();
   const safePayload = payload || {};
-  const requiredFields = ['date', 'shift', 'client', 'jobNumber', 'startTime', 'startLocation', 'instructions', 'truckNumbers'];
-  const missingField = requiredFields.find((field) => !String(safePayload[field] || '').trim());
-  if (missingField) {
-    throw new Error(`Missing required dispatch field: ${missingField}`);
+  const mode = String(safePayload.status || 'Dispatched').trim();
+  const createdAt = new Date().toISOString();
+  const updatedBy = String(actorId || '').trim() || 'system';
+
+  const truckNumbers = parseTruckNumbers_(safePayload.truckNumbers);
+  if (!truckNumbers.length) {
+    throw new Error('Truck numbers are required.');
   }
 
-  const values = [];
-  values[1] = String((safePayload.date) || '').trim();
-  values[2] = String((safePayload.shift) || '').trim();
-  values[3] = String((safePayload.client) || '').trim();
-  values[4] = String((safePayload.jobNumber) || '').trim();
-  values[5] = String((safePayload.startTime) || '').trim();
-  values[6] = String((safePayload.startLocation) || '').trim();
-  values[7] = String((safePayload.instructions) || '').trim();
-  values[8] = '';
-  values[9] = String((safePayload.truckNumbers) || '').trim();
-  values[10] = '';
-  values[11] = '';
-  values[12] = '';
-  values[13] = '';
-  values[14] = '';
-  values[15] = '';
+  const baseRequired = ['date', 'shift'];
+  const missingBase = baseRequired.find((field) => !String(safePayload[field] || '').trim());
+  if (missingBase) throw new Error(`Missing required dispatch field: ${missingBase}`);
 
-  onFormSubmit({ values: values, actorId: String(actorId || '').trim() });
+  const isConfirmedMode = mode === 'Confirmed';
+  const isDispatchedMode = mode === 'Dispatched';
+  if (!isConfirmedMode && !isDispatchedMode) {
+    throw new Error('Status must be Confirmed or Dispatched.');
+  }
+
+  const assignments = Array.isArray(safePayload.assignments) ? safePayload.assignments : [];
+  const normalizedAssignments = assignments
+    .map((item) => ({
+      job_number: String((item && item.jobNumber) || '').trim(),
+      start_time: String((item && item.startTime) || '').trim(),
+      start_location: String((item && item.startLocation) || '').trim(),
+      instructions: String((item && item.instructions) || '').trim(),
+      notes: String((item && item.notes) || '').trim()
+    }))
+    .filter((item) => item.job_number || item.start_time || item.start_location || item.instructions || item.notes);
+
+  const defaultAssignment = {
+    job_number: String(safePayload.jobNumber || '').trim(),
+    start_time: String(safePayload.startTime || '').trim(),
+    start_location: String(safePayload.startLocation || '').trim(),
+    instructions: String(safePayload.instructions || '').trim(),
+    notes: String(safePayload.notes || '').trim()
+  };
+
+  if (!normalizedAssignments.length && (defaultAssignment.job_number || defaultAssignment.start_time || defaultAssignment.start_location || defaultAssignment.instructions || defaultAssignment.notes)) {
+    normalizedAssignments.push(defaultAssignment);
+  }
+
+  if (isDispatchedMode) {
+    const required = ['client', 'jobNumber', 'startTime', 'startLocation', 'instructions'];
+    const missing = required.find((field) => !String(safePayload[field] || '').trim());
+    if (missing) throw new Error(`Missing required dispatch field: ${missing}`);
+  }
+
+  const baseRow = {
+    createdAt: createdAt,
+    date: String(safePayload.date || '').trim(),
+    shift: String(safePayload.shift || '').trim(),
+    client: String(safePayload.client || '').trim(),
+    clientName: String(safePayload.clientName || safePayload.client || '').trim(),
+    jobNumber: String(safePayload.jobNumber || '').trim(),
+    startTime: String(safePayload.startTime || '').trim(),
+    startLocation: String(safePayload.startLocation || '').trim(),
+    instructions: String(safePayload.instructions || '').trim(),
+    notes: String(safePayload.notes || '').trim(),
+    tollsPolicy: String(safePayload.tollsPolicy || '').trim(),
+    assignmentsJson: JSON.stringify(normalizedAssignments),
+    truckNumbers: truckNumbers.join(', '),
+    status: mode,
+    lastUpdatedAt: createdAt,
+    lastUpdatedBy: updatedBy,
+    changeSummary: '',
+    cancelReason: '',
+    docId: '',
+    docUrl: '',
+    lastConfirmedAt: '',
+    isConfirmed: false
+  };
+
+  if (isConfirmedMode) {
+    const confirmedDispatchId = newDispatchId_();
+    appendDispatchIndexRow_({
+      ...baseRow,
+      dispatchId: confirmedDispatchId
+    });
+    createNotificationsForDispatch_(confirmedDispatchId, truckNumbers, 'confirmed_created', `Confirmed dispatch created for ${truckNumbers.join(', ')}`);
+    assertUniqueDispatchIds_();
+    return { status: 'ok', mode: mode };
+  }
+
+  const formValues = [];
+  formValues[1] = baseRow.date;
+  formValues[2] = baseRow.shift;
+  formValues[3] = baseRow.client;
+  formValues[4] = baseRow.jobNumber;
+  formValues[5] = baseRow.startTime;
+  formValues[6] = baseRow.startLocation;
+  formValues[7] = baseRow.instructions;
+  formValues[8] = baseRow.notes;
+  formValues[9] = baseRow.truckNumbers;
+  formValues[10] = baseRow.tollsPolicy;
+
+  const second = normalizedAssignments[1] || {};
+  formValues[11] = second.job_number || '';
+  formValues[12] = '';
+  formValues[13] = second.start_time || '';
+  formValues[14] = second.start_location || '';
+  formValues[15] = second.instructions || '';
+
+  onFormSubmit({ values: formValues, actorId: updatedBy, clientName: baseRow.clientName, assignmentsJson: baseRow.assignmentsJson });
+  return { status: 'ok', mode: mode };
 }
 
+/**
+ * Create or update one company web page
 /**
  * Create or update one company web page that lists dispatches by Upcoming, Today, and Past.
  *
@@ -1475,4 +1860,58 @@ function repairDispatchDocLinks_DEV_() {
 
   log_(`repairDispatchDocLinks_DEV_ scanned=${stats.scanned} updated=${stats.updated}`);
   return stats;
+}
+
+
+/**
+ * Read notifications for a user newest-first.
+ *
+ * @param {string} userId
+ * @returns {Array<Object>}
+ */
+function getNotificationsForUser(userId) {
+  ensureDevSchema_();
+  const sheet = getSheet_('Notifications');
+  const headerMap = getHeaderMap_(sheet);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  const rows = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+  const oneBased = headerMap;
+  const idx = {};
+  Object.keys(oneBased).forEach((k)=>idx[k]=oneBased[k]-1);
+  return rows
+    .map((row)=>({
+      notification_id: String(row[idx.notification_id] || '').trim(),
+      created_at: String(row[idx.created_at] || '').trim(),
+      recipient_user_id: String(row[idx.recipient_user_id] || '').trim(),
+      dispatch_id: String(row[idx.dispatch_id] || '').trim(),
+      type: String(row[idx.type] || '').trim(),
+      message: String(row[idx.message] || '').trim(),
+      is_read: row[idx.is_read] === true || String(row[idx.is_read] || '').toLowerCase() === 'true',
+      read_at: String(row[idx.read_at] || '').trim()
+    }))
+    .filter((n)=>n.recipient_user_id === String(userId || '').trim())
+    .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+}
+
+/**
+ * Mark one notification as read.
+ *
+ * @param {string} notificationId
+ * @param {string} userId
+ * @returns {{status:string}}
+ */
+function markNotificationRead(notificationId, userId) {
+  ensureDevSchema_();
+  const sheet = getSheet_('Notifications');
+  const headerMap = getHeaderMap_(sheet);
+  const lastRow = sheet.getLastRow();
+  for (let rowIndex = 2; rowIndex <= lastRow; rowIndex++) {
+    const rowObj = getRowObject_(sheet, rowIndex, headerMap);
+    if (String(rowObj.notification_id || '').trim() !== String(notificationId || '').trim()) continue;
+    if (String(rowObj.recipient_user_id || '').trim() !== String(userId || '').trim()) continue;
+    setRowValuesByHeader_(sheet, rowIndex, headerMap, { is_read: true, read_at: new Date().toISOString() });
+    return { status: 'ok' };
+  }
+  throw new Error('Notification not found.');
 }
