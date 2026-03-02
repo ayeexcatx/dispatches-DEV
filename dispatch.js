@@ -65,10 +65,10 @@ const DEV_SCHEMA_HEADERS = {
   ],
   Confirmations: [
     'dispatch_id',
-    'truck_number',
-    'confirmation_type',
+    'user_id',
     'timestamp',
-    'confirmed_by'
+    'confirmation_type',
+    'dispatch_status'
   ],
   TimeEntries: [
     'timeEntryId',
@@ -307,19 +307,20 @@ function createNotificationsForDispatch_(dispatchId, truckNumbers, type, message
  * Add one confirmation history row.
  *
  * @param {string} dispatchId
- * @param {string} truckNumber
+ * @param {string} userId
  * @param {string} confirmationType
- * @param {string} confirmedBy
+ * @param {string} dispatchStatus
  */
-function appendConfirmationHistory_(dispatchId, truckNumber, confirmationType, confirmedBy) {
+function appendConfirmationHistory_(dispatchId, userId, confirmationType, dispatchStatus) {
   const confirmationSheet = getSheet_('Confirmations');
-  confirmationSheet.appendRow([
-    dispatchId,
-    truckNumber,
-    confirmationType,
-    new Date().toISOString(),
-    confirmedBy || 'unknown'
-  ]);
+  const headerMap = getHeaderMap_(confirmationSheet);
+  appendDispatchRowByHeader_(confirmationSheet, headerMap, {
+    dispatch_id: String(dispatchId || '').trim(),
+    user_id: String(userId || '').trim() || 'unknown',
+    timestamp: new Date().toISOString(),
+    confirmation_type: String(confirmationType || '').trim() || 'confirmed',
+    dispatch_status: String(dispatchStatus || '').trim()
+  });
 }
 
 /**
@@ -724,24 +725,37 @@ function getConfirmationTypeForStatus_(status) {
 /**
  * Append a confirmation row and mark the dispatch as confirmed.
  *
+ * @param {string} token - Portal token.
  * @param {string} dispatchId - Dispatch UUID.
- * @param {string} truckNumber - Truck identity shown in portal.
- * @returns {{status:string}} Result payload for client.
+ * @returns {{status:string,dispatchId:string}} Result payload for client.
  */
-function confirmDispatchReceipt(dispatchId, truckNumber) {
+function confirmDispatchReceipt(token, dispatchId) {
   ensureDevSchema_();
 
-  const activeUserEmail = Session.getActiveUser().getEmail();
-  const confirmedBy = activeUserEmail || 'unknown';
+  const safeToken = String(token || '').trim();
+  const safeDispatchId = String(dispatchId || '').trim();
+  if (!safeToken) {
+    throw new Error('Missing token for confirm action.');
+  }
+  if (!safeDispatchId) {
+    throw new Error('Missing dispatch_id for confirm action.');
+  }
 
-  const dispatchUpdate = markDispatchConfirmed_(dispatchId);
-  const confirmationType = getConfirmationTypeForStatus_(dispatchUpdate.status);
+  const actor = getActivePortalUserByToken_(safeToken);
+  if (!actor || !(String(actor.userId || '').trim())) {
+    throw new Error('Unauthorized confirm action.');
+  }
 
-  appendConfirmationHistory_(dispatchId, truckNumber, confirmationType, confirmedBy);
+  const dispatchRecord = getDispatchRecordById_(safeDispatchId);
+  const statusAtConfirm = String(dispatchRecord.rowObject.status || '').trim();
+  const dispatchUpdate = markDispatchConfirmed_(safeDispatchId);
+  const confirmationType = getConfirmationTypeForStatus_(statusAtConfirm || dispatchUpdate.status);
 
-  log_(`Confirmation success dispatch_id=${dispatchId} truck_number=${truckNumber} confirmation_type=${confirmationType} dispatches_row=${dispatchUpdate.rowNumber}`);
+  appendConfirmationHistory_(safeDispatchId, actor.userId, confirmationType, statusAtConfirm || dispatchUpdate.status);
 
-  return { status: 'ok' };
+  log_(`Confirmation success dispatch_id=${safeDispatchId} user_id=${actor.userId} confirmation_type=${confirmationType} status=${statusAtConfirm || dispatchUpdate.status} dispatches_row=${dispatchUpdate.rowNumber}`);
+
+  return { status: 'ok', dispatchId: safeDispatchId };
 }
 
 /**
@@ -1464,10 +1478,10 @@ function updateCompanyDispatchPage(companyName) {
   const isFinalizedStatus = normalizedStatus === 'completed';
   const showConfirmButton = !isConfirmed && !isFinalizedStatus;
   const confirmButton = !dispatchId
-    ? `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`
+    ? `<button type="button" class="confirmBtn" disabled title="Dispatch index missing">Unavailable</button>`
     : showConfirmButton
-      ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${truckNumber}" onclick="confirmReceipt(this)">Confirm Receipt</button>`
-      : `<button class="confirm-btn" disabled>${isConfirmed ? 'Confirmed ✓' : 'Finalized'}</button>`;
+      ? `<button type="button" class="confirmBtn" data-dispatch-id="${dispatchId}">Confirm receipt</button>`
+      : `<button type="button" class="confirmBtn" disabled>${isConfirmed ? 'Confirmed ✓' : 'Finalized'}</button>`;
   const link = `<div class="dispatch-block"><a href="${url}">${label}</a>${confirmButton}</div>`;
 
     const entry = { date: d.date, html: link };
@@ -1538,7 +1552,7 @@ function updateCompanyDispatchPage(companyName) {
       text-decoration: underline;
       font-weight: bold; /* Make dispatch links bold so they stand out. */
     }
-    .confirm-btn {
+    .confirmBtn {
       margin-left: 12px;
       vertical-align: middle;
       border: none;
@@ -1550,8 +1564,8 @@ function updateCompanyDispatchPage(companyName) {
       background-color: #1a73e8;
       color: #fff;
     }
-    .confirm-btn.confirmed,
-    .confirm-btn:disabled {
+    .confirmBtn.confirmed,
+    .confirmBtn:disabled {
       background-color: #d9ead3;
       color: #2e7d32;
       cursor: default;
@@ -1593,26 +1607,11 @@ function updateCompanyDispatchPage(companyName) {
   </div>
 
   <script>
-    function confirmReceipt(buttonEl) {
-      const dispatchId = buttonEl.getAttribute('data-dispatch-id');
-      const truckNumber = buttonEl.getAttribute('data-truck-number');
-      if (!dispatchId || !truckNumber) return;
-
-      const originalLabel = buttonEl.textContent;
-      buttonEl.disabled = true;
-      buttonEl.textContent = 'Confirming...';
-
-      google.script.run
-        .withSuccessHandler(function () {
-          buttonEl.textContent = 'Confirmed ✓';
-        })
-        .withFailureHandler(function (error) {
-          buttonEl.disabled = false;
-          buttonEl.textContent = originalLabel || 'Confirm Receipt';
-          alert('Confirmation failed: ' + (error && error.message ? error.message : error));
-        })
-        .confirmDispatchReceipt(dispatchId, truckNumber);
-    }
+    document.addEventListener('click', function (e) {
+      const btn = e && e.target && e.target.closest ? e.target.closest('button.confirmBtn') : null;
+      if (!btn || btn.disabled) return;
+      alert('Please use the tokenized portal URL to confirm receipt.');
+    }, true);
   </script>
 </body>
 </html>`;
