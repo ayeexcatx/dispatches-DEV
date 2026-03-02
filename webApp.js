@@ -115,16 +115,12 @@ function doGet(e) {
 
     if (!shouldUseCompanyFallback && isAdmin) {
       if (pageParam === 'repair') {
-        p = 'repair';
+        p = 'dashboard';
         repairDispatchDocLinks_DEV_();
-        const baseUrl = ScriptApp.getService().getUrl();
-        const repairUrl = baseUrl
-          + '?t=' + encodeURIComponent(token)
-          + '&p=dashboard&msg=repair_done';
-        const repairHtml = '<script>window.location.replace(' + JSON.stringify(repairUrl) + ');</script>';
-        logDoGet_(repairHtml.length);
-        return HtmlService.createHtmlOutput(repairHtml)
-          .setTitle('Repairing Dispatch Links');
+        if (e && e.parameter) {
+          e.parameter.p = 'dashboard';
+          e.parameter.msg = 'repair_done';
+        }
       }
 
       const resolvedPage = p;
@@ -229,6 +225,7 @@ function buildAdminHtml_(opts) {
   const notices = {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
+    edit_ok: { kind: 'success', text: 'Dispatch amended.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
     create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
     repair_done: { kind: 'success', text: 'Dispatch doc links repair completed.' }
@@ -410,7 +407,7 @@ function buildAdminHtml_(opts) {
   ${pageContent}
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
-    const APP_BASE_URL = ${JSON.stringify(baseUrl || '')};
+    const BASE_URL = ${JSON.stringify(baseUrl || '')};
     const INITIAL_NOTICE = ${JSON.stringify(notice)};
     const INITIAL_ERROR = ${JSON.stringify(errorParam)};
     const CURRENT_PAGE = ${JSON.stringify(page)};
@@ -534,7 +531,7 @@ function buildAdminHtml_(opts) {
           }
           case 'amend': {
             if (!dispatchId) return;
-            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'edit', dispatch_id: dispatchId });
+            goAdmin('edit', { dispatch_id: dispatchId });
             return;
           }
           case 'cancel': {
@@ -622,7 +619,7 @@ function buildAdminHtml_(opts) {
     }
 
     function buildUrlWithParams(values) {
-      const base = APP_BASE_URL || window.location.href.split('?')[0];
+      const base = BASE_URL || window.location.href.split('?')[0];
       const params = new URLSearchParams();
       Object.keys(values || {}).forEach(function (key) {
         const value = values[key];
@@ -630,6 +627,21 @@ function buildAdminHtml_(opts) {
         params.set(key, String(value));
       });
       return base + '?' + params.toString();
+    }
+
+    function goAdmin(page, extraParams) {
+      const params = extraParams || {};
+      const queryParts = [
+        't=' + encodeURIComponent(TOKEN || ''),
+        'p=' + encodeURIComponent(String(page || '').trim())
+      ];
+      Object.keys(params).forEach(function (key) {
+        const value = params[key];
+        if (value === undefined || value === null || String(value) === '') return;
+        queryParts.push(encodeURIComponent(String(key)) + '=' + encodeURIComponent(String(value)));
+      });
+      const targetUrl = (BASE_URL || window.location.href.split('?')[0]) + '?' + queryParts.join('&');
+      window.open(targetUrl, '_top');
     }
 
     function showBanner(kind, text) {
@@ -861,7 +873,7 @@ function buildAdminHtml_(opts) {
         }
         google.script.run
           .withSuccessHandler(function () {
-            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'amend_ok' });
+            goAdmin('dashboard', { msg: 'edit_ok' });
           })
           .withFailureHandler(function (error) {
             showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -872,7 +884,7 @@ function buildAdminHtml_(opts) {
 
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'create_ok' });
+          goAdmin('dashboard', { msg: 'create_ok' });
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
