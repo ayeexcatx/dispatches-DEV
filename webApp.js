@@ -115,16 +115,18 @@ function doGet(e) {
 
     if (!shouldUseCompanyFallback && isAdmin) {
       if (pageParam === 'repair') {
-        p = 'repair';
+        p = 'dashboard';
         repairDispatchDocLinks_DEV_();
-        const baseUrl = ScriptApp.getService().getUrl();
-        const repairUrl = baseUrl
-          + '?t=' + encodeURIComponent(token)
-          + '&p=dashboard&msg=repair_done';
-        const repairHtml = '<script>window.location.replace(' + JSON.stringify(repairUrl) + ');</script>';
-        logDoGet_(repairHtml.length);
-        return HtmlService.createHtmlOutput(repairHtml)
-          .setTitle('Repairing Dispatch Links');
+        content = buildAdminHtml_({
+          user: user,
+          token: token,
+          params: Object.assign({}, (e && e.parameter) || {}, { msg: 'repair_done' }),
+          forcedPage: 'dashboard'
+        });
+        pageTitle = 'Admin Dispatch Dashboard';
+        logDoGet_(content.length);
+        return HtmlService.createHtmlOutput(content)
+          .setTitle(pageTitle);
       }
 
       const resolvedPage = p;
@@ -229,6 +231,7 @@ function buildAdminHtml_(opts) {
   const notices = {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
+    edit_ok: { kind: 'success', text: 'Dispatch amended.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
     create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
     repair_done: { kind: 'success', text: 'Dispatch doc links repair completed.' }
@@ -410,7 +413,7 @@ function buildAdminHtml_(opts) {
   ${pageContent}
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
-    const APP_BASE_URL = ${JSON.stringify(baseUrl || '')};
+    const BASE_URL = ${JSON.stringify(baseUrl || '')};
     const INITIAL_NOTICE = ${JSON.stringify(notice)};
     const INITIAL_ERROR = ${JSON.stringify(errorParam)};
     const CURRENT_PAGE = ${JSON.stringify(page)};
@@ -534,7 +537,7 @@ function buildAdminHtml_(opts) {
           }
           case 'amend': {
             if (!dispatchId) return;
-            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'edit', dispatch_id: dispatchId });
+            goAdmin('edit', { dispatch_id: dispatchId });
             return;
           }
           case 'cancel': {
@@ -622,7 +625,7 @@ function buildAdminHtml_(opts) {
     }
 
     function buildUrlWithParams(values) {
-      const base = APP_BASE_URL || window.location.href.split('?')[0];
+      const base = BASE_URL || window.location.href.split('?')[0];
       const params = new URLSearchParams();
       Object.keys(values || {}).forEach(function (key) {
         const value = values[key];
@@ -630,6 +633,21 @@ function buildAdminHtml_(opts) {
         params.set(key, String(value));
       });
       return base + '?' + params.toString();
+    }
+
+    function goAdmin(page, extraParams) {
+      const base = BASE_URL || window.location.href.split('?')[0];
+      const parts = [
+        't=' + encodeURIComponent(TOKEN),
+        'p=' + encodeURIComponent(String(page || 'dashboard'))
+      ];
+      Object.keys(extraParams || {}).forEach(function (key) {
+        const value = extraParams[key];
+        if (value === undefined || value === null || String(value) === '') return;
+        parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(value)));
+      });
+      const url = base + '?' + parts.join('&');
+      window.open(url, '_top');
     }
 
     function showBanner(kind, text) {
@@ -861,7 +879,7 @@ function buildAdminHtml_(opts) {
         }
         google.script.run
           .withSuccessHandler(function () {
-            window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'amend_ok' });
+            goAdmin('dashboard', { msg: 'edit_ok' });
           })
           .withFailureHandler(function (error) {
             showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -872,7 +890,7 @@ function buildAdminHtml_(opts) {
 
       google.script.run
         .withSuccessHandler(function () {
-          window.location.href = buildUrlWithParams({ t: TOKEN, p: 'dashboard', msg: 'create_ok' });
+          goAdmin('dashboard', { msg: 'create_ok' });
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -904,8 +922,7 @@ function buildAdminHtml_(opts) {
       if (!window.confirm('Run one-time repair for legacy doc links?')) return;
       google.script.run
         .withSuccessHandler(function () {
-          showBanner('success', 'Dispatch doc links repair completed.');
-          loadDashboardData(TOKEN);
+          goAdmin('dashboard', { msg: 'repair_done' });
         })
         .withFailureHandler(function (error) {
           showBanner('error', (error && error.message) || String(error || 'Unknown error'));
@@ -1312,12 +1329,11 @@ function cancelDispatchFromDashboard(token, dispatchId, cancelReason) {
  *
  * @param {string} token - Portal token.
  * @param {{date:string,shift:string,client:string,jobNumber:string,startTime:string,startLocation:string,instructions:string,truckNumbers:string}} payload
- * @returns {{status:string}} Server result.
+ * @returns {{status:string,mode:string,createdCount:number,dispatchIds:string[]}} Server result.
  */
 function createDispatchFromDashboard(token, payload) {
   const actor = getAuthorizedDashboardActor_(token);
-  createDispatchFromPortalForm(payload, actor.userId || actor.displayName || 'unknown');
-  return { status: 'ok' };
+  return createDispatchFromPortalForm(payload, actor.userId || actor.displayName || 'unknown');
 }
 
 
@@ -1580,9 +1596,46 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
     <h2>Notifications</h2>
     <div id="notificationsList"><p>Loading notifications...</p></div>
   </div>
+  <details class="section" style="margin-top:12px;"><summary>Errors</summary><pre id="clientErrors">No client errors.</pre></details>
+  <details class="section" style="margin-top:12px;"><summary>Client Log</summary><pre id="clientLog">No client log entries.</pre></details>
 
   <script>
     const TOKEN = ${JSON.stringify(token || '')};
+
+    function appendLine(existing, line, emptySentinel) {
+      const cur = String(existing || '').trim();
+      const prefix = cur && cur !== emptySentinel ? (cur + '\n') : '';
+      return prefix + line;
+    }
+
+    function appendPortalLog(message) {
+      const line = '[' + new Date().toISOString() + '] ' + String(message || 'log');
+      const el = document.getElementById('clientLog');
+      if (el) {
+        el.textContent = appendLine(el.textContent, line, 'No client log entries.');
+      } else {
+        console.log('[portal-notifications] ' + line);
+      }
+    }
+
+    function appendPortalError(message) {
+      const line = '[' + new Date().toISOString() + '] ' + String(message || 'Unknown client error');
+      const el = document.getElementById('clientErrors');
+      if (el) {
+        el.textContent = appendLine(el.textContent, line, 'No client errors.');
+      } else {
+        console.error('[portal-notifications] ' + line);
+      }
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     function renderNotifications(items) {
       const host = document.getElementById('notificationsList');
@@ -1595,16 +1648,25 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
         const unread = n.is_read ? '' : ' <strong>(unread)</strong>';
         const link = n.dispatch_id ? ('?t=' + encodeURIComponent(TOKEN) + '&dispatch_id=' + encodeURIComponent(n.dispatch_id)) : '#';
         const notificationId = String(n.notification_id || '');
-        return '<div class="dispatch-block"><a href="' + link + '">' + n.message + '</a>' + unread + ' <button type="button" class="notifReadBtn" data-notification-id="' + notificationId + '">Mark read</button></div>';
+        const message = escapeHtml(String(n.message || 'Notification'));
+        return '<div class="dispatch-block"><a href="' + link + '">' + message + '</a>' + unread + ' <button type="button" class="notifReadBtn" data-notification-id="' + notificationId + '">Mark read</button></div>';
       }).join('');
     }
 
     function loadNotifications() {
+      appendPortalLog('notifications load start');
       google.script.run
-        .withSuccessHandler(function (items) { renderNotifications(items || []); })
-        .withFailureHandler(function () {
+        .withSuccessHandler(function (items) {
+          const list = Array.isArray(items) ? items : [];
+          appendPortalLog('notifications load success count=' + list.length);
+          renderNotifications(list);
+        })
+        .withFailureHandler(function (error) {
+          const message = (error && error.message) ? String(error.message) : String(error || 'Unknown error');
+          appendPortalLog('notifications load failure: ' + message);
+          appendPortalError('Failed to load notifications: ' + message);
           const host = document.getElementById('notificationsList');
-          if (host) host.innerHTML = '<p>Failed to load notifications.</p>';
+          if (host) host.innerHTML = '<p>Failed to load notifications: ' + escapeHtml(message) + '</p>';
         })
         .getMyNotifications(TOKEN);
     }

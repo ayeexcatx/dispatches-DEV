@@ -868,6 +868,7 @@ function saveDispatchEdit(dispatchId, payload, updatedBy) {
  * save an archive copy and refresh the company dispatch page.
  *
  * @param {GoogleAppsScript.Events.FormsOnFormSubmit} e - The submitted form answers.
+ * @returns {{status:string,mode:string,createdCount:number,dispatchIds:string[]}}
  */
 function onFormSubmit(e) {
   const values = e.values; // Get all answers that were submitted in this form response.
@@ -901,7 +902,7 @@ function onFormSubmit(e) {
   console.log("Raw Start Time 02:", startTime02Raw);
 
   ensureDevSchema_();
-  const assignedTruckNumbers = truckNumbers.join(', ');
+  const createdDispatchIds = [];
 
 truckNumbers.forEach(truckNumber => { // Run the full archive flow for each selected truck, one by one.
 
@@ -1069,7 +1070,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       notes: String(notes || '').trim(),
       tollsPolicy: String(tolls || '').trim(),
       assignmentsJson: String((e && e.assignmentsJson) || '[]'),
-      truckNumbers: assignedTruckNumbers,
+      truckNumbers: truckNumber,
       status: 'Dispatched',
       lastUpdatedAt: new Date().toISOString(),
       lastUpdatedBy: actorId || 'system',
@@ -1078,9 +1079,11 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       lastConfirmedAt: '',
       isConfirmed: false
     });
+    createdDispatchIds.push(dispatchId);
     createNotificationsForDispatch_(dispatchId, [truckNumber], 'dispatched_created', `Dispatched job ${jobNumber} created for ${truckNumber}`);
   } catch (error) {
     console.error("Error creating archive copy:", error); // If archive creation fails, write the error to logs for troubleshooting.
+    throw new Error(`Failed to create dispatched doc for ${truckNumber}: ${error && error.message ? error.message : error}`);
   }
 
   /**
@@ -1210,6 +1213,7 @@ if (companyName) {
 }); // Finished processing all selected trucks.
 
   assertUniqueDispatchIds_();
+  return { status: 'ok', mode: 'Dispatched', createdCount: createdDispatchIds.length, dispatchIds: createdDispatchIds };
 } // End of the form submit workflow.
 
 
@@ -1218,7 +1222,7 @@ if (companyName) {
  *
  * @param {Object} payload
  * @param {string=} actorId
- * @returns {{status:string,mode:string}}
+ * @returns {{status:string,mode:string,createdCount:number,dispatchIds:string[]}}
  */
 function createDispatchFromPortalForm(payload, actorId) {
   ensureDevSchema_();
@@ -1297,14 +1301,19 @@ function createDispatchFromPortalForm(payload, actorId) {
   };
 
   if (isConfirmedMode) {
-    const confirmedDispatchId = newDispatchId_();
-    appendDispatchIndexRow_({
-      ...baseRow,
-      dispatchId: confirmedDispatchId
+    const dispatchIds = [];
+    truckNumbers.forEach((truckNumber) => {
+      const confirmedDispatchId = newDispatchId_();
+      dispatchIds.push(confirmedDispatchId);
+      appendDispatchIndexRow_({
+        ...baseRow,
+        dispatchId: confirmedDispatchId,
+        truckNumbers: truckNumber
+      });
+      createNotificationsForDispatch_(confirmedDispatchId, [truckNumber], 'confirmed_created', `Confirmed dispatch created for ${truckNumber}`);
     });
-    createNotificationsForDispatch_(confirmedDispatchId, truckNumbers, 'confirmed_created', `Confirmed dispatch created for ${truckNumbers.join(', ')}`);
     assertUniqueDispatchIds_();
-    return { status: 'ok', mode: mode };
+    return { status: 'ok', mode: mode, createdCount: dispatchIds.length, dispatchIds: dispatchIds };
   }
 
   const formValues = [];
@@ -1326,8 +1335,7 @@ function createDispatchFromPortalForm(payload, actorId) {
   formValues[14] = second.start_location || '';
   formValues[15] = second.instructions || '';
 
-  onFormSubmit({ values: formValues, actorId: updatedBy, clientName: baseRow.clientName, assignmentsJson: baseRow.assignmentsJson });
-  return { status: 'ok', mode: mode };
+  return onFormSubmit({ values: formValues, actorId: updatedBy, clientName: baseRow.clientName, assignmentsJson: baseRow.assignmentsJson });
 }
 
 /**
