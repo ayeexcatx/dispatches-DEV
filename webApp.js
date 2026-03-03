@@ -374,7 +374,9 @@ function buildAdminHtml_(opts) {
           <textarea name="changeSummary" rows="3"></textarea>
         </label>
         <div class="form-actions">
-          <button type="submit">${page === 'edit' ? 'Save Dispatch' : 'Create Dispatch'}</button>
+          ${page === 'edit'
+            ? '<button type="submit">Save Dispatch</button>'
+            : '<button type="submit" data-submit-mode="dashboard">Submit & Return to Dashboard</button>\n          <button type="submit" data-submit-mode="new">Submit & Create New Dispatch</button>'}
         </div>
         </form>
       </section>
@@ -902,9 +904,24 @@ function buildAdminHtml_(opts) {
       return assignments;
     }
 
+    function resetCreateDispatchForm(form) {
+      if (!form) return;
+      form.reset();
+      if (form.elements.status) {
+        form.elements.status.value = 'Confirmed';
+      }
+      var blocks = document.getElementById('assignmentBlocks');
+      if (blocks) {
+        blocks.innerHTML = '';
+      }
+      addAssignmentBlock();
+    }
+
     function submitCreateDispatch(event) {
       event.preventDefault();
       const form = event.target;
+      const submitter = event.submitter;
+      const submitMode = String((submitter && submitter.dataset && submitter.dataset.submitMode) || 'dashboard').trim();
       const formData = new FormData(form);
       const assignments = collectAssignments(formData);
       const payload = {
@@ -956,6 +973,11 @@ function buildAdminHtml_(opts) {
 
       google.script.run
         .withSuccessHandler(function () {
+          if (submitMode === 'new') {
+            resetCreateDispatchForm(form);
+            showBanner('success', 'Created');
+            return;
+          }
           showBanner('success', 'Created.');
           window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok', '_top');
         })
