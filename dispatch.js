@@ -233,7 +233,9 @@ function getNotificationRecipientsForDispatch_(truckNumbers) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
 
-  const normalizedTrucks = (truckNumbers || []).map((truck) => String(truck || '').trim()).filter(Boolean);
+  const normalizedTrucks = (truckNumbers || [])
+    .map((truck) => String(truck || '').trim().toUpperCase())
+    .filter(Boolean);
   const truckSet = {};
   normalizedTrucks.forEach((truck) => { truckSet[truck] = true; });
 
@@ -244,30 +246,17 @@ function getNotificationRecipientsForDispatch_(truckNumbers) {
     const isActive = activeRaw === true || String(activeRaw || '').toUpperCase() === 'TRUE';
     if (!isActive) continue;
 
-    const role = String(rowObj.role || '').trim().toLowerCase();
     const userId = String(rowObj.user_id || '').trim();
     if (!userId) continue;
 
-    const truckNumber = String(rowObj.truck_number || '').trim();
-    const company = String(rowObj.company || '').trim();
-
-    const isTruckRecipient = truckNumber && truckSet[truckNumber];
-    const isCompanyOwner = role === 'company_owner' && company;
-
-    let include = isTruckRecipient;
-    if (!include && isCompanyOwner) {
-      include = normalizedTrucks.some((truck) => {
-        return normalizedTrucks.indexOf(truck) !== -1 && company && getCompanyForTruck_(truck) === company;
-      });
-    }
-
-    if (!include) continue;
+    const truckNumber = String(rowObj.truck_number || '').trim().toUpperCase();
+    if (!truckNumber || !truckSet[truckNumber]) continue;
 
     recipientsByUserId[userId] = {
       userId: userId,
       displayName: String(rowObj.display_name || '').trim(),
       role: String(rowObj.role || '').trim(),
-      company: company,
+      company: String(rowObj.company || '').trim(),
       truckNumber: truckNumber
     };
   }
@@ -300,6 +289,9 @@ function createNotificationsForDispatch_(dispatchId, truckNumbers, type, message
       is_read: false,
       read_at: ''
     });
+    if (ENV === 'DEV') {
+      log_('notification_created dispatch_id=' + String(dispatchId || '').trim() + ' recipient_user_id=' + recipient.userId);
+    }
   });
 }
 
@@ -1886,7 +1878,7 @@ function getNotificationsForUser(userId) {
   const oneBased = headerMap;
   const idx = {};
   Object.keys(oneBased).forEach((k)=>idx[k]=oneBased[k]-1);
-  return rows
+  const notifications = rows
     .map((row)=>({
       notification_id: String(row[idx.notification_id] || '').trim(),
       created_at: String(row[idx.created_at] || '').trim(),
@@ -1899,6 +1891,10 @@ function getNotificationsForUser(userId) {
     }))
     .filter((n)=>n.recipient_user_id === String(userId || '').trim())
     .sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at)));
+  if (ENV === 'DEV') {
+    log_('notifications_fetch user_id=' + String(userId || '').trim() + ' returned=' + notifications.length);
+  }
+  return notifications;
 }
 
 /**

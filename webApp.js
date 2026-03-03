@@ -1460,7 +1460,11 @@ function saveDispatchEditFromDashboard(token, dispatchId, payload) {
 function getMyNotifications(token) {
   const actor = getActivePortalUserByToken_(String(token || '').trim());
   if (!actor) throw new Error('Unauthorized.');
-  return getNotificationsForUser(actor.userId);
+  const notifications = getNotificationsForUser(actor.userId);
+  if (ENV === 'DEV') {
+    log_('notifications_fetch token_user_id=' + String(actor.userId || '').trim() + ' returned=' + notifications.length);
+  }
+  return notifications;
 }
 
 /**
@@ -1687,6 +1691,10 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       flex: 1;
       min-width: 0;
     }
+    .notification-error {
+      color: #b42318;
+      font-weight: 700;
+    }
     .confirmBtn {
       margin-left: 12px;
       vertical-align: middle;
@@ -1832,14 +1840,14 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
         .withSuccessHandler(function (items) {
           const list = Array.isArray(items) ? items : [];
           appendPortalLog('notifications load success count=' + list.length);
-          renderNotifications(list);
+          renderNotifications(list); // Always replaces initial Loading text.
         })
         .withFailureHandler(function (error) {
           const message = (error && error.message) ? String(error.message) : String(error || 'Unknown error');
           appendPortalLog('notifications load failure: ' + message);
           appendPortalError('Failed to load notifications: ' + message);
           const host = document.getElementById('notificationsList');
-          if (host) host.innerHTML = '<p>Failed to load notifications: ' + escapeHtml(message) + '</p>';
+          if (host) host.innerHTML = '<p class="notification-error">Failed to load notifications: ' + escapeHtml(message) + '</p>';
         })
         .getMyNotifications(TOKEN);
     }
