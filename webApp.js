@@ -9,15 +9,50 @@ const SHOW_REPAIR_BUTTON = false;
 
 const NY_TIMEZONE = 'America/New_York';
 
+function formatMinutesAsTime12_(totalMinutes) {
+  const safeMinutes = ((Number(totalMinutes) % 1440) + 1440) % 1440;
+  const hour24 = Math.floor(safeMinutes / 60);
+  const minute = safeMinutes % 60;
+  const suffix = hour24 >= 12 ? 'PM' : 'AM';
+  const hour12 = hour24 % 12 || 12;
+  return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function normalizeTimeString_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?$/);
+  if (!match) return text;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const suffix = match[3] ? String(match[3]).toUpperCase() : '';
+  if (!isFinite(hour) || !isFinite(minute)) return text;
+
+  if (suffix) {
+    const safeHour = Math.min(Math.max(hour, 1), 12);
+    const safeMinute = Math.min(Math.max(minute, 0), 59);
+    return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')} ${suffix}`;
+  }
+
+  return `${String(Math.min(Math.max(hour, 0), 23)).padStart(2, '0')}:${String(Math.min(Math.max(minute, 0), 59)).padStart(2, '0')}`;
+}
+
 function parseSheetDateOrTimeValue_(value) {
   if (value instanceof Date) return new Date(value.getTime());
   if (typeof value === 'number' && isFinite(value)) {
-    const millis = Math.round((value - 25569) * 86400000);
-    return new Date(millis);
+    if (Math.abs(value) >= 1) {
+      const millis = Math.round((value - 25569) * 86400000);
+      return new Date(millis);
+    }
+    return { type: 'sheetSerialTime', minutes: Math.round(value * 24 * 60) };
   }
 
   const text = String(value || '').trim();
   if (!text) return null;
+
+  if (/^\d{1,2}:\d{2}/.test(text)) {
+    return normalizeTimeString_(text);
+  }
 
   const isoDateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoDateOnly) {
@@ -27,16 +62,6 @@ function parseSheetDateOrTimeValue_(value) {
   const slashDate = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashDate) {
     return new Date(Number(slashDate[3]), Number(slashDate[1]) - 1, Number(slashDate[2]));
-  }
-
-  const timeOnly = text.match(/^(\d{1,2})(?::?(\d{2}))?\s*(AM|PM)?$/i);
-  if (timeOnly) {
-    let hour = Number(timeOnly[1] || 0);
-    const minute = Number(timeOnly[2] || 0);
-    const meridiem = String(timeOnly[3] || '').toUpperCase();
-    if (meridiem === 'PM' && hour < 12) hour += 12;
-    if (meridiem === 'AM' && hour === 12) hour = 0;
-    return new Date(1899, 11, 30, hour, minute, 0, 0);
   }
 
   const parsed = new Date(text);
@@ -52,6 +77,10 @@ function formatDateNY_(value) {
 function formatTimeNY_(value) {
   const parsed = parseSheetDateOrTimeValue_(value);
   if (!parsed) return String(value || '').trim();
+  if (typeof parsed === 'string') return parsed;
+  if (parsed && parsed.type === 'sheetSerialTime') {
+    return formatMinutesAsTime12_(parsed.minutes);
+  }
   return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
 }
 
@@ -376,7 +405,7 @@ function buildAdminHtml_(opts) {
         <div class="form-actions">
           ${page === 'edit'
             ? '<button type="submit">Save Dispatch</button>'
-            : '<button type="submit" data-submit-mode="dashboard">Submit & Return to Dashboard</button>\n          <button type="submit" data-submit-mode="new">Submit & Create New Dispatch</button>'}
+            : '<button type="submit" onclick="window.__submitMode = &quot;dashboard&quot;">Submit & Return to Dashboard</button>\n          <button type="submit" onclick="window.__submitMode = &quot;new&quot;">Submit & Create New Dispatch</button>'}
         </div>
         </form>
       </section>
@@ -484,6 +513,7 @@ function buildAdminHtml_(opts) {
     const CURRENT_PAGE = ${JSON.stringify(page)};
     const SERVER_RENDER_ID = ${JSON.stringify(renderId)};
     const DEV_DEBUG = ${JSON.stringify(showDebugUi)};
+    window.__submitMode = null;
 
     function appendLine(existing, line, emptySentinel) {
       const cur = String(existing || '').trim();
@@ -920,8 +950,7 @@ function buildAdminHtml_(opts) {
     function submitCreateDispatch(event) {
       event.preventDefault();
       const form = event.target;
-      const submitter = event.submitter;
-      const submitMode = String((submitter && submitter.dataset && submitter.dataset.submitMode) || 'dashboard').trim();
+      const submitMode = String(window.__submitMode || 'dashboard').trim();
       const formData = new FormData(form);
       const assignments = collectAssignments(formData);
       const payload = {
@@ -942,10 +971,12 @@ function buildAdminHtml_(opts) {
 
       if (!payload.date || !payload.shift || !payload.truckNumbers) {
         showBanner('error', 'Date, shift, and truck numbers are required.');
+        window.__submitMode = null;
         return;
       }
       if (payload.status === 'Dispatched' && (!payload.client || !payload.jobNumber || !payload.startTime || !payload.startLocation || !payload.instructions)) {
         showBanner('error', 'Dispatched requires client and assignment details.');
+        window.__submitMode = null;
         return;
       }
 
@@ -954,18 +985,21 @@ function buildAdminHtml_(opts) {
       if (mode === 'edit') {
         if (!payload.changeSummary) {
           showBanner('error', 'Amendment change summary is required.');
+          window.__submitMode = null;
           return;
         }
         google.script.run
           .withSuccessHandler(function () {
             showBanner('success', 'Created.');
             window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=edit_ok', '_top');
+            window.__submitMode = null;
           })
           .withFailureHandler(function (error) {
             const fullError = (error && error.stack)
               ? String(error.stack)
               : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
             showBanner('error', fullError);
+            window.__submitMode = null;
           })
           .saveDispatchEditFromDashboard(TOKEN, dispatchId, payload);
         return;
@@ -973,19 +1007,21 @@ function buildAdminHtml_(opts) {
 
       google.script.run
         .withSuccessHandler(function () {
-          if (submitMode === 'new') {
-            resetCreateDispatchForm(form);
-            showBanner('success', 'Created');
+          if (submitMode === 'dashboard') {
+            window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok', '_top');
+            window.__submitMode = null;
             return;
           }
-          showBanner('success', 'Created.');
-          window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok', '_top');
+          resetCreateDispatchForm(form);
+          showBanner('success', 'Created');
+          window.__submitMode = null;
         })
         .withFailureHandler(function (error) {
           const fullError = (error && error.stack)
             ? String(error.stack)
             : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
           showBanner('error', fullError);
+          window.__submitMode = null;
         })
         .createDispatchFromDashboard(TOKEN, payload);
     }
