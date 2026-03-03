@@ -89,18 +89,29 @@ function formatDateNY_(value) {
 }
 
 function formatTimeNY_(value) {
-  if (value instanceof Date || (typeof value === 'number' && isFinite(value))) {
-    const parsed = parseSheetDateOrTimeValue_(value);
-    if (!parsed) return String(value || '').trim();
-    if (parsed && parsed.type === 'sheetSerialTime') {
-      return formatMinutesAsTime12_(parsed.minutes);
-    }
-    return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
+  if (typeof value === 'number' && isFinite(value)) {
+    let minutes = Math.round(value * 1440);
+    minutes = ((minutes % 1440) + 1440) % 1440;
+    return formatMinutesAsTime12_(minutes);
+  }
+
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, NY_TIMEZONE, 'hh:mm a');
   }
 
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (isStandardizedTime12_(raw)) return raw;
+
+  const match24 = raw.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (match24) {
+    const hour24 = Number(match24[1]);
+    const minute = Number(match24[2]);
+    const suffix = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12 = hour24 % 12 || 12;
+    return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${suffix}`;
+  }
+
   return raw;
 }
 
