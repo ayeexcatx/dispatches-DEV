@@ -344,7 +344,7 @@ function buildAdminHtml_(opts) {
   const notices = {
     completed_ok: { kind: 'success', text: 'Dispatch marked completed.' },
     amend_ok: { kind: 'success', text: 'Dispatch amended.' },
-    edit_ok: { kind: 'success', text: 'Dispatch amended.' },
+    edit_ok: { kind: 'success', text: 'Dispatch updated successfully.' },
     cancel_ok: { kind: 'success', text: 'Dispatch canceled.' },
     create_ok: { kind: 'success', text: 'Dispatch created successfully.' },
     repair_done: { kind: 'success', text: 'Dispatch doc links repair completed.' }
@@ -1022,8 +1022,9 @@ function buildAdminHtml_(opts) {
       addAssignmentBlock();
     }
 
-    function redirectToDashboardAfterSuccess() {
-      const url = BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok';
+    function redirectToDashboardAfterSuccess(msg) {
+      const notice = msg || 'create_ok';
+      const url = BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=' + encodeURIComponent(notice);
       appendClientLog('[nav] to dashboard ' + url);
       try {
         top.location.href = url;
@@ -1082,8 +1083,8 @@ function buildAdminHtml_(opts) {
         }
         google.script.run
           .withSuccessHandler(function () {
-            showBanner('success', 'Created.');
-            redirectToDashboardAfterSuccess();
+            showBanner('success', 'Saved.');
+            redirectToDashboardAfterSuccess('edit_ok');
             window.__submitMode = null;
           })
           .withFailureHandler(function (error) {
@@ -1100,7 +1101,7 @@ function buildAdminHtml_(opts) {
       google.script.run
         .withSuccessHandler(function () {
           if (submitMode === 'dashboard') {
-            redirectToDashboardAfterSuccess();
+            redirectToDashboardAfterSuccess('create_ok');
             window.__submitMode = null;
             return;
           }
