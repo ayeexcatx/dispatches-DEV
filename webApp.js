@@ -1496,7 +1496,7 @@ function saveDispatchEditFromDashboard(token, dispatchId, payload) {
 function getMyNotifications(token) {
   const actor = getActivePortalUserByToken_(String(token || '').trim());
   if (!actor) throw new Error('Unauthorized.');
-  const notifications = getNotificationsForUser(actor.userId);
+  const notifications = getNotificationsForUser(actor.userId) || [];
   if (ENV === 'DEV') {
     log_('notifications_fetch token_user_id=' + String(actor.userId || '').trim() + ' returned=' + notifications.length);
   }
@@ -1772,7 +1772,7 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
 
   <div class="section" id="notificationsSection">
     <h2 id="notificationsHeader">Notifications</h2>
-    <div id="notificationsList"><p>Loading notifications...</p></div>
+    <div id="notifBox">Loading notifications…</div>
   </div>
 
   <div class="section upcoming">
@@ -1831,7 +1831,7 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
     }
 
     function renderNotifications(items) {
-      const host = document.getElementById('notificationsList');
+      const host = document.getElementById('notifBox');
       const header = document.getElementById('notificationsHeader');
       if (!host) return;
 
@@ -1853,7 +1853,7 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       }
 
       if (!list.length) {
-        host.innerHTML = '<p>No notifications.</p>';
+        host.textContent = 'No notifications.';
         return;
       }
 
@@ -1871,19 +1871,20 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
     }
 
     function loadNotifications() {
-      appendPortalLog('notifications load start');
+      const host = document.getElementById('notifBox');
+      if (host) host.textContent = 'Loading notifications… (requesting)';
+      appendClientLog('[notif] start');
       google.script.run
         .withSuccessHandler(function (items) {
           const list = Array.isArray(items) ? items : [];
-          appendPortalLog('notifications load success count=' + list.length);
-          renderNotifications(list); // Always replaces initial Loading text.
+          appendClientLog('[notif] success count=' + list.length);
+          renderNotifications(list);
         })
         .withFailureHandler(function (error) {
           const message = (error && error.message) ? String(error.message) : String(error || 'Unknown error');
-          appendPortalLog('notifications load failure: ' + message);
+          appendClientLog('[notif] failure ' + message);
           appendPortalError('Failed to load notifications: ' + message);
-          const host = document.getElementById('notificationsList');
-          if (host) host.innerHTML = '<p class="notification-error">Failed to load notifications: ' + escapeHtml(message) + '</p>';
+          if (host) host.textContent = 'Failed to load notifications: ' + message;
         })
         .getMyNotifications(TOKEN);
     }
@@ -1937,7 +1938,9 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
         .confirmDispatchReceipt(TOKEN, dispatchId);
     }, true);
 
-    loadNotifications();
+    window.addEventListener('load', function () {
+      setTimeout(loadNotifications, 0);
+    });
   </script>
 </body>
 </html>`;
