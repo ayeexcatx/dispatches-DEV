@@ -7,6 +7,71 @@ const DISPATCH_ARCHIVES_FOLDER_ID = '1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE';
 const DEV_DEBUG = isDevEnvironment_();
 const SHOW_REPAIR_BUTTON = false;
 
+const NY_TIMEZONE = 'America/New_York';
+
+function parseSheetDateOrTimeValue_(value) {
+  if (value instanceof Date) return new Date(value.getTime());
+  if (typeof value === 'number' && isFinite(value)) {
+    const millis = Math.round((value - 25569) * 86400000);
+    return new Date(millis);
+  }
+
+  const text = String(value || '').trim();
+  if (!text) return null;
+
+  const isoDateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDateOnly) {
+    return new Date(Number(isoDateOnly[1]), Number(isoDateOnly[2]) - 1, Number(isoDateOnly[3]));
+  }
+
+  const slashDate = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashDate) {
+    return new Date(Number(slashDate[3]), Number(slashDate[1]) - 1, Number(slashDate[2]));
+  }
+
+  const timeOnly = text.match(/^(\d{1,2})(?::?(\d{2}))?\s*(AM|PM)?$/i);
+  if (timeOnly) {
+    let hour = Number(timeOnly[1] || 0);
+    const minute = Number(timeOnly[2] || 0);
+    const meridiem = String(timeOnly[3] || '').toUpperCase();
+    if (meridiem === 'PM' && hour < 12) hour += 12;
+    if (meridiem === 'AM' && hour === 12) hour = 0;
+    return new Date(1899, 11, 30, hour, minute, 0, 0);
+  }
+
+  const parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateNY_(value) {
+  const parsed = parseSheetDateOrTimeValue_(value);
+  if (!parsed) return String(value || '').trim();
+  return Utilities.formatDate(parsed, NY_TIMEZONE, 'MM/dd/yyyy');
+}
+
+function formatTimeNY_(value) {
+  const parsed = parseSheetDateOrTimeValue_(value);
+  if (!parsed) return String(value || '').trim();
+  return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
+}
+
+function isValidDocUrl_(value) {
+  return /^https:\/\/docs\.google\.com\/document\/d\//i.test(String(value || '').trim())
+    || /^https:\/\//i.test(String(value || '').trim());
+}
+
+function isValidDocId_(value) {
+  return /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
+}
+
+function resolveDocUrl_(docUrl, docId) {
+  const trimmedUrl = String(docUrl || '').trim();
+  const trimmedId = String(docId || '').trim();
+  if (isValidDocUrl_(trimmedUrl)) return trimmedUrl;
+  if (isValidDocId_(trimmedId)) return 'https://docs.google.com/document/d/' + trimmedId + '/edit';
+  return '';
+}
+
 /**
  * Handle a web request and return the matching scoped dispatch page.
  *
@@ -328,16 +393,15 @@ function buildAdminHtml_(opts) {
         <thead>
           <tr>
             <th>Date</th>
-            <th>Truck Numbers</th>
-            <th>Client</th>
-            <th>Job Number</th>
             <th>Start Time</th>
+            <th>Truck Number</th>
+            <th>Job Number</th>
             <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="dispatchTableBody">
-          <tr><td colspan="7">Loading dashboard data…</td></tr>
+          <tr><td colspan="6">Loading dashboard data…</td></tr>
         </tbody>
       </table>
     `;
@@ -687,7 +751,7 @@ function buildAdminHtml_(opts) {
       }
 
       if (!dispatches.length) {
-        tableBody.innerHTML = '<tr><td colspan="7">No active dispatches found.</td></tr>';
+        tableBody.innerHTML = '<tr><td colspan="6">No active dispatches found.</td></tr>';
         appendClientLog('[render] buttons view=0 complete=0 amend=0 cancel=0 disabledView=0 disabledTotal=0');
         return;
       }
@@ -700,10 +764,9 @@ function buildAdminHtml_(opts) {
         const viewButtonLabel = hasLinkedDoc ? 'View Dispatch' : 'No doc linked';
         return '<tr>' +
           '<td>' + escapeHtml(dispatch.date) + '</td>' +
-          '<td>' + escapeHtml(dispatch.truck_numbers) + '</td>' +
-          '<td>' + escapeHtml(dispatch.client) + '</td>' +
-          '<td>' + escapeHtml(dispatch.job_number) + '</td>' +
           '<td>' + escapeHtml(dispatch.start_time) + '</td>' +
+          '<td>' + escapeHtml(dispatch.truck_numbers) + '</td>' +
+          '<td>' + escapeHtml(dispatch.job_number) + '</td>' +
           '<td>' + escapeHtml(dispatch.status) + '</td>' +
           '<td class="actions">' +
             '<button type="button" class="actionBtn" data-action="view" data-dispatch-id="' + escapeHtml(dispatchId) + '" data-doc-url="' + escapeHtml(docUrl) + '" data-doc-id="' + escapeHtml(docId) + '" ' + (hasLinkedDoc ? '' : 'disabled') + '>' + viewButtonLabel + '</button>' +
@@ -879,10 +942,14 @@ function buildAdminHtml_(opts) {
         }
         google.script.run
           .withSuccessHandler(function () {
-            goAdmin('dashboard', { msg: 'edit_ok' });
+            showBanner('success', 'Created.');
+            window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=edit_ok', '_top');
           })
           .withFailureHandler(function (error) {
-            showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+            const fullError = (error && error.stack)
+              ? String(error.stack)
+              : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
+            showBanner('error', fullError);
           })
           .saveDispatchEditFromDashboard(TOKEN, dispatchId, payload);
         return;
@@ -890,10 +957,14 @@ function buildAdminHtml_(opts) {
 
       google.script.run
         .withSuccessHandler(function () {
-          goAdmin('dashboard', { msg: 'create_ok' });
+          showBanner('success', 'Created.');
+          window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok', '_top');
         })
         .withFailureHandler(function (error) {
-          showBanner('error', (error && error.message) || String(error || 'Unknown error'));
+          const fullError = (error && error.stack)
+            ? String(error.stack)
+            : ((error && error.message) ? String(error.message) : String(error || 'Unknown error'));
+          showBanner('error', fullError);
         })
         .createDispatchFromDashboard(TOKEN, payload);
     }
@@ -1090,21 +1161,17 @@ function getAdminDashboardData(token) {
     response.activeDispatches = rows
       .filter(row => String(row[headerMap.status] || '').trim() !== 'Completed')
       .map((row) => {
-        const dateValue = row[headerMap.date];
-        const dateText = dateValue instanceof Date
-          ? dateValue.toISOString()
-          : String(dateValue || '').trim();
-        const normalize = (value) => (value instanceof Date ? value.toISOString() : String(value || '').trim());
+        const normalizeText = (value) => String(value || '').trim();
         return {
-          dispatch_id: normalize(row[headerMap.dispatch_id]),
-          date: dateText,
-          truck_numbers: normalize(row[headerMap.truck_numbers]),
-          client: normalize(row[headerMap.client]),
-          job_number: normalize(row[headerMap.job_number]),
-          start_time: normalize(row[headerMap.start_time]),
-          status: normalize(row[headerMap.status]),
-          doc_url: headerMap.doc_url !== undefined ? normalize(row[headerMap.doc_url]) : '',
-          doc_id: headerMap.doc_id !== undefined ? normalize(row[headerMap.doc_id]) : ''
+          dispatch_id: normalizeText(row[headerMap.dispatch_id]),
+          date: formatDateNY_(row[headerMap.date]),
+          truck_numbers: normalizeText(row[headerMap.truck_numbers]),
+          client: normalizeText(row[headerMap.client]),
+          job_number: normalizeText(row[headerMap.job_number]),
+          start_time: formatTimeNY_(row[headerMap.start_time]),
+          status: normalizeText(row[headerMap.status]),
+          doc_url: headerMap.doc_url !== undefined ? normalizeText(row[headerMap.doc_url]) : '',
+          doc_id: headerMap.doc_id !== undefined ? normalizeText(row[headerMap.doc_id]) : ''
         };
       });
 
@@ -1428,6 +1495,15 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate());
   }
 
+  function escapeHtmlText_(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   const today = stripTime(new Date());
   const normalizedTruck = String(truckNumber || '').trim();
   const matchingDispatches = rows.filter((row) => {
@@ -1447,48 +1523,43 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
   matchingDispatches.forEach((row) => {
     const dispatchId = String(row[headerMap.dispatch_id] || '').trim();
     const dateValue = row[headerMap.date];
-    const dateString = dateValue instanceof Date
-      ? Utilities.formatDate(dateValue, Session.getScriptTimeZone(), 'yyyy-MM-dd')
-      : String(dateValue || '').trim();
+    const startValue = row[headerMap.start_time];
+    const dispatchDate = parseSheetDateOrTimeValue_(dateValue) || new Date(0);
 
-    const startTimeRaw = String(row[headerMap.start_time] || '').trim();
-    const timeDigits = startTimeRaw.replace(/\D/g, '');
-    const timePart = (timeDigits + '0000').slice(0, 4);
-    const dispatchDate = dateString
-      ? new Date(`${dateString}T${timePart.slice(0, 2)}:${timePart.slice(2)}:00`)
-      : new Date(0);
-
-    const friendlyDate = dispatchDate.toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    });
-    const friendlyTime = dispatchDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const friendlyDate = formatDateNY_(dateValue);
+    const friendlyTime = formatTimeNY_(startValue);
 
     const jobNumber = String(row[headerMap.job_number] || '').trim();
     const status = String(row[headerMap.status] || '').trim();
     const docUrl = String(row[headerMap.doc_url] || '').trim();
+    const docId = headerMap.doc_id !== undefined ? String(row[headerMap.doc_id] || '').trim() : '';
+    const resolvedDocUrl = resolveDocUrl_(docUrl, docId);
     const rawIsConfirmed = row[headerMap.is_confirmed];
     const isConfirmed = rawIsConfirmed === true
       || String(rawIsConfirmed || '').toLowerCase() === 'true';
 
-    let statusLabel = '';
-    if (status === 'Canceled') {
-      statusLabel = " <span style='color: #d93025; font-weight: bold;'>CANCELLED</span>";
-    } else if (status === 'Amended') {
-      statusLabel = " <span style='color: #FFBF00; font-weight: bold;'>AMENDMENT</span>";
-    }
-
-    const label = `${friendlyDate} @ ${friendlyTime} – ${normalizedTruck} – ${jobNumber}${statusLabel}`;
+    const statusClass = status === 'Canceled'
+      ? ' status-canceled'
+      : (status === 'Amended' ? ' status-amended' : '');
+    const statusText = status || 'Unknown';
     const showConfirmButton = !isConfirmed;
     const confirmButton = !dispatchId
-      ? `<button class="confirm-btn" disabled title="Dispatch index missing">Unavailable</button>`
+      ? '<button type="button" class="confirmBtn" disabled title="Dispatch index missing">Unavailable</button>'
       : showConfirmButton
-        ? `<button class="confirm-btn" data-dispatch-id="${dispatchId}" data-truck-number="${normalizedTruck}" onclick="confirmReceipt(this)">Confirm Receipt</button>`
-        : '<button class="confirm-btn" disabled>Confirmed ✓</button>';
+        ? `<button type="button" class="confirmBtn" data-dispatch-id="${dispatchId}">Confirm receipt</button>`
+        : '<button type="button" class="confirmBtn" disabled>Confirmed ✓</button>';
+    const viewButton = isValidDocUrl_(resolvedDocUrl)
+      ? `<a class="viewBtn" href="${resolvedDocUrl}" target="_blank" rel="noopener">View</a>`
+      : '<button type="button" class="viewBtn" disabled>No doc</button>';
 
-    const link = `<div class="dispatch-block"><a href="${docUrl}">${label}</a>${confirmButton}</div>`;
-    const entry = { date: dispatchDate, html: link };
+    const block = '<div class="dispatch-block">'
+      + '<div class="dispatch-meta"><strong>Date:</strong> ' + escapeHtmlText_(friendlyDate) + '</div>'
+      + '<div class="dispatch-meta"><strong>Start Time:</strong> ' + escapeHtmlText_(friendlyTime) + '</div>'
+      + '<div class="dispatch-meta"><strong>Job Number:</strong> ' + escapeHtmlText_(jobNumber) + '</div>'
+      + '<div class="dispatch-meta"><strong>Status:</strong> <span class="status-pill' + statusClass + '">' + escapeHtmlText_(statusText) + '</span></div>'
+      + '<div class="dispatch-actions">' + viewButton + confirmButton + '</div>'
+      + '</div>';
+    const entry = { date: dispatchDate, html: block };
 
     const dispatchDay = stripTime(dispatchDate);
     if (dispatchDay.getTime() < today.getTime()) {
@@ -1530,15 +1601,72 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       margin-top: 0;
     }
     .dispatch-block {
-      padding: 10px 0;
-      border-bottom: 1px solid #e0e0e0;
+      padding: 10px;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      background: #fff;
     }
-    .dispatch-block a {
-      color: #1a73e8;
-      text-decoration: underline;
-      font-weight: bold;
+    .dispatch-meta {
+      margin: 2px 0;
     }
-    .confirm-btn {
+    .dispatch-actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .viewBtn {
+      display: inline-block;
+      text-decoration: none;
+      border: 1px solid #c8d7f2;
+      background: #eef3ff;
+      color: #1a4fb3;
+      border-radius: 4px;
+      padding: 4px 8px;
+      font-weight: 600;
+    }
+    .viewBtn[disabled] {
+      background: #f3f4f6;
+      color: #888;
+      border-color: #ddd;
+    }
+    .status-pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: #eef2ff;
+      color: #1e40af;
+      font-weight: 700;
+    }
+    .status-pill.status-canceled {
+      background: #fde8e8;
+      color: #b42318;
+    }
+    .status-pill.status-amended {
+      background: #fff4cc;
+      color: #8a6d00;
+    }
+    .notification-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin-top: 8px;
+    }
+    .notification-item.unread {
+      background: #eef4ff;
+      border-color: #c7dafc;
+      font-weight: 700;
+    }
+    .notification-item .notification-message {
+      flex: 1;
+      min-width: 0;
+    }
+    .confirmBtn {
       margin-left: 12px;
       vertical-align: middle;
       border: none;
@@ -1550,8 +1678,8 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       background-color: #1a73e8;
       color: #fff;
     }
-    .confirm-btn.confirmed,
-    .confirm-btn:disabled {
+    .confirmBtn.confirmed,
+    .confirmBtn:disabled {
       background-color: #d9ead3;
       color: #2e7d32;
       cursor: default;
@@ -1577,6 +1705,11 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       <h1 class="dispatch-title">Dispatches — ${normalizedTruck}</h1>
     </div>
 
+  <div class="section" id="notificationsSection">
+    <h2 id="notificationsHeader">Notifications</h2>
+    <div id="notificationsList"><p>Loading notifications...</p></div>
+  </div>
+
   <div class="section upcoming">
     <h2>Upcoming</h2>
     ${upcomingHTML || '<p>No upcoming dispatches.</p>'}
@@ -1590,11 +1723,6 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
   <div class="section past">
     <h2>Past</h2>
     ${pastHTML || '<p>No past dispatches.</p>'}
-  </div>
-
-  <div class="section">
-    <h2>Notifications</h2>
-    <div id="notificationsList"><p>Loading notifications...</p></div>
   </div>
   <details class="section" style="margin-top:12px;"><summary>Errors</summary><pre id="clientErrors">No client errors.</pre></details>
   <details class="section" style="margin-top:12px;"><summary>Client Log</summary><pre id="clientLog">No client log entries.</pre></details>
@@ -1639,17 +1767,41 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
 
     function renderNotifications(items) {
       const host = document.getElementById('notificationsList');
+      const header = document.getElementById('notificationsHeader');
       if (!host) return;
-      if (!items || !items.length) {
+
+      const list = Array.isArray(items) ? items.slice() : [];
+      list.sort(function (a, b) {
+        const aTime = Date.parse(String((a && a.created_at) || '')) || 0;
+        const bTime = Date.parse(String((b && b.created_at) || '')) || 0;
+        return bTime - aTime;
+      });
+
+      const unreadCount = list.filter(function (n) {
+        return !(n && n.is_read);
+      }).length;
+
+      if (header) {
+        header.textContent = unreadCount > 0
+          ? ('Notifications (' + unreadCount + ' unread)')
+          : 'Notifications (0 unread)';
+      }
+
+      if (!list.length) {
         host.innerHTML = '<p>No notifications.</p>';
         return;
       }
-      host.innerHTML = items.map(function (n) {
-        const unread = n.is_read ? '' : ' <strong>(unread)</strong>';
+
+      host.innerHTML = list.map(function (n) {
+        const isRead = Boolean(n && n.is_read);
+        const unreadClass = isRead ? '' : ' unread';
         const link = n.dispatch_id ? ('?t=' + encodeURIComponent(TOKEN) + '&dispatch_id=' + encodeURIComponent(n.dispatch_id)) : '#';
-        const notificationId = String(n.notification_id || '');
-        const message = escapeHtml(String(n.message || 'Notification'));
-        return '<div class="dispatch-block"><a href="' + link + '">' + message + '</a>' + unread + ' <button type="button" class="notifReadBtn" data-notification-id="' + notificationId + '">Mark read</button></div>';
+        const notificationId = String((n && n.notification_id) || '');
+        const message = escapeHtml(String((n && n.message) || 'Notification'));
+        const markReadButton = isRead
+          ? ''
+          : (' <button type="button" class="notifReadBtn" data-notification-id="' + escapeHtml(notificationId) + '">Mark read</button>');
+        return '<div class="notification-item' + unreadClass + '"><a class="notification-message" href="' + link + '">' + message + '</a>' + markReadButton + '</div>';
       }).join('');
     }
 
@@ -1686,26 +1838,41 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
         .markMyNotificationRead(TOKEN, notificationId);
     }
 
-    function confirmReceipt(buttonEl) {
-      const dispatchId = buttonEl.getAttribute('data-dispatch-id');
-      const truckNumber = buttonEl.getAttribute('data-truck-number');
-      if (!dispatchId || !truckNumber) return;
+    function appendClientLog(message) {
+      appendPortalLog(message);
+    }
 
-      const originalLabel = buttonEl.textContent;
-      buttonEl.disabled = true;
-      buttonEl.textContent = 'Confirming...';
+    function appendClientError(message) {
+      appendPortalError(message);
+    }
 
+    function reloadDispatchList() {
+      window.open(window.location.href, '_top');
+    }
+
+    document.addEventListener('click', function (e) {
+      const btn = e && e.target && e.target.closest ? e.target.closest('button.confirmBtn') : null;
+      if (!btn || btn.disabled) return;
+      const dispatchId = String(btn.dataset.dispatchId || '').trim();
+      if (!dispatchId) return;
+      const originalLabel = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Confirming...';
+      appendClientLog('[confirm-click] ' + dispatchId);
       google.script.run
         .withSuccessHandler(function () {
-          buttonEl.textContent = 'Confirmed ✓';
+          appendClientLog('[confirm] ok');
+          reloadDispatchList();
         })
-        .withFailureHandler(function (error) {
-          buttonEl.disabled = false;
-          buttonEl.textContent = originalLabel || 'Confirm Receipt';
-          alert('Confirmation failed: ' + (error && error.message ? error.message : error));
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          btn.textContent = originalLabel || 'Confirm receipt';
+          appendClientError((err && err.message) || String(err));
         })
-        .confirmDispatchReceipt(dispatchId, truckNumber);
-    }
+        .confirmDispatchReceipt(TOKEN, dispatchId);
+    }, true);
+
+    loadNotifications();
   </script>
 </body>
 </html>`;
