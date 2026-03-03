@@ -808,6 +808,10 @@ function getDispatchById_(dispatchId) {
   } catch (error) {
     assignments = [];
   }
+  const normalizedAssignments = assignments.map((item) => ({
+    ...item,
+    start_time: formatTimeNY_(item && (item.start_time || item.startTime || ''))
+  }));
   return {
     dispatch_id: String(row.dispatch_id || '').trim(),
     date: String(row.date || '').trim(),
@@ -815,14 +819,14 @@ function getDispatchById_(dispatchId) {
     client: String(row.client || '').trim(),
     client_name: String(row.client_name || row.client || '').trim(),
     job_number: String(row.job_number || '').trim(),
-    start_time: String(row.start_time || '').trim(),
+    start_time: formatTimeNY_(row.start_time),
     start_location: String(row.start_location || '').trim(),
     instructions: String(row.instructions || '').trim(),
     notes: String(row.notes || '').trim(),
     tolls_policy: String(row.tolls_policy || '').trim(),
     truck_numbers: String(row.truck_numbers || '').trim(),
     status: String(row.status || '').trim(),
-    assignments: assignments
+    assignments: normalizedAssignments
   };
 }
 
@@ -1070,7 +1074,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       client: company,
       clientName: String((e && e.clientName) || company || '').trim(),
       jobNumber: jobNumber,
-      startTime: startTime,
+      startTime: String(rawStartTime || '').trim(),
       startLocation: startLocation,
       instructions: instructions,
       notes: String(notes || '').trim(),
