@@ -909,26 +909,22 @@ function buildAdminHtml_(opts) {
       if (!text) return '';
       var normalized = text.toUpperCase().replace(/\./g, '').replace(/\s+/g, '');
 
-      // Supports browser <input type="time"> values like "05:00" and "17:45"
-      // and allows optional seconds only when they are exactly "00".
-      var match = normalized.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-      if (match) {
-        var hour24 = Number(match[1]);
-        var minute24 = Number(match[2]);
-        var second24 = match[3] || '';
-        if (hour24 < 0 || hour24 > 23 || minute24 < 0 || minute24 > 59) throw new Error('Time must be valid.');
-        if (second24 && second24 !== '00') throw new Error('Start Time must be in minute precision (seconds must be :00).');
-        var suffix24 = hour24 >= 12 ? 'PM' : 'AM';
-        var hourOut24 = hour24 % 12 || 12;
-        return String(hourOut24).padStart(2, '0') + ':' + String(minute24).padStart(2, '0') + ' ' + suffix24;
-      }
-
-      match = normalized.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
+      var match = normalized.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
       if (match) {
         var hour12 = Number(match[1]);
         var minute12 = Number(match[2]);
         if (hour12 < 1 || hour12 > 12 || minute12 < 0 || minute12 > 59) throw new Error('Time must be valid.');
         return String(hour12).padStart(2, '0') + ':' + String(minute12).padStart(2, '0') + ' ' + match[3];
+      }
+
+      match = normalized.match(/^(\d{1,2}):(\d{2})$/);
+      if (match) {
+        var hour24 = Number(match[1]);
+        var minute24 = Number(match[2]);
+        if (hour24 < 0 || hour24 > 23 || minute24 < 0 || minute24 > 59) throw new Error('Time must be valid.');
+        var suffix24 = hour24 >= 12 ? 'PM' : 'AM';
+        var hourOut24 = hour24 % 12 || 12;
+        return String(hourOut24).padStart(2, '0') + ':' + String(minute24).padStart(2, '0') + ' ' + suffix24;
       }
 
       match = normalized.match(/^(\d{1,2})(AM|PM)$/);
@@ -947,7 +943,7 @@ function buildAdminHtml_(opts) {
         return String(hourOutOnly24).padStart(2, '0') + ':00 ' + suffixOnly24;
       }
 
-      throw new Error('Start Time must be in a valid format (e.g. 05:00, 17:45, 5am, 5:00 PM).');
+      throw new Error('Start Time must be in a valid format (e.g. 05:00, 5am, 5:00 PM).');
     }
 
     function assignmentTemplate(index, value) {
