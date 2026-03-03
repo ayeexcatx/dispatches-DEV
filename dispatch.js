@@ -109,6 +109,49 @@ function newDispatchId_() {
   return Utilities.getUuid();
 }
 
+
+function normalizeTimeInput_(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const compact = text.toUpperCase().replace(/\./g, '').replace(/\s+/g, '');
+
+  let match = compact.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
+  if (match) {
+    const hour12 = Number(match[1]);
+    const minute12 = Number(match[2]);
+    if (hour12 < 1 || hour12 > 12 || minute12 < 0 || minute12 > 59) throw new Error('Time must be valid.');
+    return `${String(hour12).padStart(2, '0')}:${String(minute12).padStart(2, '0')} ${match[3]}`;
+  }
+
+  match = compact.match(/^(\d{1,2}):(\d{2})$/);
+  if (match) {
+    const hour24 = Number(match[1]);
+    const minute24 = Number(match[2]);
+    if (hour24 < 0 || hour24 > 23 || minute24 < 0 || minute24 > 59) throw new Error('Time must be valid.');
+    const suffix24 = hour24 >= 12 ? 'PM' : 'AM';
+    const hour12From24 = hour24 % 12 || 12;
+    return `${String(hour12From24).padStart(2, '0')}:${String(minute24).padStart(2, '0')} ${suffix24}`;
+  }
+
+  match = compact.match(/^(\d{1,2})(AM|PM)$/);
+  if (match) {
+    const hourOnly12 = Number(match[1]);
+    if (hourOnly12 < 1 || hourOnly12 > 12) throw new Error('Time must be valid.');
+    return `${String(hourOnly12).padStart(2, '0')}:00 ${match[2]}`;
+  }
+
+  match = compact.match(/^(\d{1,2})$/);
+  if (match) {
+    const hourOnly24 = Number(match[1]);
+    if (hourOnly24 < 0 || hourOnly24 > 23) throw new Error('Time must be valid.');
+    const suffixOnly24 = hourOnly24 >= 12 ? 'PM' : 'AM';
+    const hourOutOnly24 = hourOnly24 % 12 || 12;
+    return `${String(hourOutOnly24).padStart(2, '0')}:00 ${suffixOnly24}`;
+  }
+
+  throw new Error('Start Time must be in a valid format (e.g. 05:00, 5am, 5:00 PM).');
+}
+
 /**
  * Safely get a sheet by name from the active spreadsheet.
  *
@@ -853,7 +896,7 @@ function saveDispatchEdit(dispatchId, payload, updatedBy) {
     client: String((payload && payload.client) || record.rowObject.client || '').trim(),
     client_name: String((payload && (payload.clientName || payload.client)) || record.rowObject.client_name || record.rowObject.client || '').trim(),
     job_number: String((payload && payload.jobNumber) || record.rowObject.job_number || '').trim(),
-    start_time: String((payload && payload.startTime) || record.rowObject.start_time || '').trim(),
+    start_time: normalizeTimeInput_((payload && payload.startTime) || record.rowObject.start_time || ''),
     start_location: String((payload && payload.startLocation) || record.rowObject.start_location || '').trim(),
     instructions: String((payload && payload.instructions) || record.rowObject.instructions || '').trim(),
     notes: String((payload && payload.notes) || record.rowObject.notes || '').trim(),
@@ -920,9 +963,9 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
   const formattedDate = Utilities.formatDate(new Date(date), Session.getScriptTimeZone(), "yyyy-MM-dd");
 
   // Convert raw time text into readable time values for drivers and office staff.
-  const shiftTime = formatTime(rawShiftTime);
-  const startTime = formatTime(rawStartTime);
-  const startTime02 = formatTime(startTime02Raw);
+  const shiftTime = normalizeTimeInput_(rawShiftTime);
+  const startTime = normalizeTimeInput_(rawStartTime);
+  const startTime02 = normalizeTimeInput_(startTime02Raw);
 
   // Make a 24-hour HHMM value (like 0615) so archived files sort by start time.
   const sortableStartTime = convertToSortableTime(rawStartTime);
@@ -1074,7 +1117,7 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
       client: company,
       clientName: String((e && e.clientName) || company || '').trim(),
       jobNumber: jobNumber,
-      startTime: String(rawStartTime || '').trim(),
+      startTime: normalizeTimeInput_(rawStartTime || ''),
       startLocation: startLocation,
       instructions: instructions,
       notes: String(notes || '').trim(),
@@ -1094,42 +1137,6 @@ truckNumbers.forEach(truckNumber => { // Run the full archive flow for each sele
   } catch (error) {
     console.error("Error creating archive copy:", error); // If archive creation fails, write the error to logs for troubleshooting.
     throw new Error(`Failed to create dispatched doc for ${truckNumber}: ${error && error.message ? error.message : error}`);
-  }
-
-  /**
-   * Read a raw time value and return a clean time like 6:15 AM in this script's time zone.
-   *
-   * @param {string} rawTime - Original time text from the form.
-   * @returns {string} A cleaned-up time string, or the original text if it cannot be parsed.
-   */
-  function formatTime(rawTime) {
-    Logger.log("Raw value received in formatTime: " + rawTime);
-    if (!rawTime) return "";
-
-    // Try to read times that look like 5:00:00 AM or 17:00.
-    const timePattern = /^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i;
-    const match = rawTime.match(timePattern);
-    if (!match) return rawTime;  // If the format is unknown, keep the original value.
-
-    let [, hourStr, minuteStr, ampm] = match;
-    let hour = parseInt(hourStr, 10);
-    const minute = parseInt(minuteStr, 10);
-
-    // Convert AM/PM time into 24-hour values before final formatting.
-    if (ampm) {
-      const isPM = ampm.toUpperCase() === "PM";
-      if (isPM && hour !== 12) hour += 12;
-      if (!isPM && hour === 12) hour = 0;
-    }
-
-    // Build a temporary Date using today's date plus this hour and minute.
-    const date = new Date();
-    date.setHours(hour);
-    date.setMinutes(minute);
-    date.setSeconds(0);
-    date.setMilliseconds(0);
-
-    return Utilities.formatDate(date, Session.getScriptTimeZone(), "h:mm a");
   }
 
   /**
@@ -1260,7 +1267,7 @@ function createDispatchFromPortalForm(payload, actorId) {
   const normalizedAssignments = assignments
     .map((item) => ({
       job_number: String((item && item.jobNumber) || '').trim(),
-      start_time: String((item && item.startTime) || '').trim(),
+      start_time: normalizeTimeInput_((item && item.startTime) || ''),
       start_location: String((item && item.startLocation) || '').trim(),
       instructions: String((item && item.instructions) || '').trim(),
       notes: String((item && item.notes) || '').trim()
@@ -1269,7 +1276,7 @@ function createDispatchFromPortalForm(payload, actorId) {
 
   const defaultAssignment = {
     job_number: String(safePayload.jobNumber || '').trim(),
-    start_time: String(safePayload.startTime || '').trim(),
+    start_time: normalizeTimeInput_(safePayload.startTime || ''),
     start_location: String(safePayload.startLocation || '').trim(),
     instructions: String(safePayload.instructions || '').trim(),
     notes: String(safePayload.notes || '').trim()
@@ -1292,7 +1299,7 @@ function createDispatchFromPortalForm(payload, actorId) {
     client: String(safePayload.client || '').trim(),
     clientName: String(safePayload.clientName || safePayload.client || '').trim(),
     jobNumber: String(safePayload.jobNumber || '').trim(),
-    startTime: String(safePayload.startTime || '').trim(),
+    startTime: normalizeTimeInput_(safePayload.startTime || ''),
     startLocation: String(safePayload.startLocation || '').trim(),
     instructions: String(safePayload.instructions || '').trim(),
     notes: String(safePayload.notes || '').trim(),

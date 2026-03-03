@@ -18,6 +18,22 @@ function formatMinutesAsTime12_(totalMinutes) {
   return `${String(hour12).padStart(2, '0')}:${String(minute).padStart(2, '0')} ${suffix}`;
 }
 
+function isStandardizedTime12_(value) {
+  return /^(0[1-9]|1[0-2]):([0-5][0-9])\s(?:AM|PM)$/.test(String(value || '').trim());
+}
+
+function standardizedTime12ToTimeInput_(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/^(0[1-9]|1[0-2]):([0-5][0-9])\s(AM|PM)$/);
+  if (!match) return text;
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const suffix = match[3];
+  if (suffix === 'AM' && hour === 12) hour = 0;
+  if (suffix === 'PM' && hour !== 12) hour += 12;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
 function normalizeTimeString_(value) {
   const text = String(value || '').trim();
   const match = text.match(/^(\d{1,2}):(\d{2})(?:\s*([AaPp][Mm]))?$/);
@@ -50,9 +66,7 @@ function parseSheetDateOrTimeValue_(value) {
   const text = String(value || '').trim();
   if (!text) return null;
 
-  if (/^\d{1,2}:\d{2}/.test(text)) {
-    return normalizeTimeString_(text);
-  }
+  if (isStandardizedTime12_(text)) return text;
 
   const isoDateOnly = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoDateOnly) {
@@ -75,13 +89,19 @@ function formatDateNY_(value) {
 }
 
 function formatTimeNY_(value) {
-  const parsed = parseSheetDateOrTimeValue_(value);
-  if (!parsed) return String(value || '').trim();
-  if (typeof parsed === 'string') return parsed;
-  if (parsed && parsed.type === 'sheetSerialTime') {
-    return formatMinutesAsTime12_(parsed.minutes);
+  if (value instanceof Date || (typeof value === 'number' && isFinite(value))) {
+    const parsed = parseSheetDateOrTimeValue_(value);
+    if (!parsed) return String(value || '').trim();
+    if (parsed && parsed.type === 'sheetSerialTime') {
+      return formatMinutesAsTime12_(parsed.minutes);
+    }
+    return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
   }
-  return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
+
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (isStandardizedTime12_(raw)) return raw;
+  return raw;
 }
 
 function isValidDocUrl_(value) {
@@ -872,12 +892,67 @@ function buildAdminHtml_(opts) {
     }
 
 
+    function standardizedTime12ToTimeInput(value) {
+      var text = String(value || '').trim();
+      var match = text.match(/^(0[1-9]|1[0-2]):([0-5][0-9])\s(AM|PM)$/);
+      if (!match) return text;
+      var hour = Number(match[1]);
+      var minute = Number(match[2]);
+      var suffix = match[3];
+      if (suffix === 'AM' && hour === 12) hour = 0;
+      if (suffix === 'PM' && hour !== 12) hour += 12;
+      return String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
+    }
+
+    function normalizeTimeInput(value) {
+      var text = String(value || '').trim();
+      if (!text) return '';
+      var normalized = text.toUpperCase().replace(/\./g, '').replace(/\s+/g, '');
+
+      var match = normalized.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
+      if (match) {
+        var hour12 = Number(match[1]);
+        var minute12 = Number(match[2]);
+        if (hour12 < 1 || hour12 > 12 || minute12 < 0 || minute12 > 59) throw new Error('Time must be valid.');
+        return String(hour12).padStart(2, '0') + ':' + String(minute12).padStart(2, '0') + ' ' + match[3];
+      }
+
+      match = normalized.match(/^(\d{1,2}):(\d{2})$/);
+      if (match) {
+        var hour24 = Number(match[1]);
+        var minute24 = Number(match[2]);
+        if (hour24 < 0 || hour24 > 23 || minute24 < 0 || minute24 > 59) throw new Error('Time must be valid.');
+        var suffix24 = hour24 >= 12 ? 'PM' : 'AM';
+        var hourOut24 = hour24 % 12 || 12;
+        return String(hourOut24).padStart(2, '0') + ':' + String(minute24).padStart(2, '0') + ' ' + suffix24;
+      }
+
+      match = normalized.match(/^(\d{1,2})(AM|PM)$/);
+      if (match) {
+        var hourOnly12 = Number(match[1]);
+        if (hourOnly12 < 1 || hourOnly12 > 12) throw new Error('Time must be valid.');
+        return String(hourOnly12).padStart(2, '0') + ':00 ' + match[2];
+      }
+
+      match = normalized.match(/^(\d{1,2})$/);
+      if (match) {
+        var hourOnly24 = Number(match[1]);
+        if (hourOnly24 < 0 || hourOnly24 > 23) throw new Error('Time must be valid.');
+        var suffixOnly24 = hourOnly24 >= 12 ? 'PM' : 'AM';
+        var hourOutOnly24 = hourOnly24 % 12 || 12;
+        return String(hourOutOnly24).padStart(2, '0') + ':00 ' + suffixOnly24;
+      }
+
+      throw new Error('Start Time must be in a valid format (e.g. 05:00, 5am, 5:00 PM).');
+    }
+
     function assignmentTemplate(index, value) {
       var v = value || {};
+      var startRaw = String(v.start_time || v.startTime || '');
       return '<fieldset class="assignment-block" data-assignment-index="' + index + '">'
         + '<legend>Assignment ' + (index + 1) + '</legend>'
         + '<label>Job Number<input type="text" name="assignment_jobNumber_' + index + '" value="' + escapeHtml(String(v.job_number || v.jobNumber || '')) + '"></label>'
-        + '<label>Start Time<input type="text" name="assignment_startTime_' + index + '" value="' + escapeHtml(String(v.start_time || v.startTime || '')) + '"></label>'
+        + '<label>Start Time<input type="time" step="60" name="assignment_startTime_' + index + '" value="' + escapeHtml(standardizedTime12ToTimeInput(startRaw)) + '"></label>'
         + '<label>Start Location<textarea name="assignment_startLocation_' + index + '" rows="2">' + escapeHtml(String(v.start_location || v.startLocation || '')) + '</textarea></label>'
         + '<label>Instructions<textarea name="assignment_instructions_' + index + '" rows="3">' + escapeHtml(String(v.instructions || '')) + '</textarea></label>'
         + '<label>Notes<textarea name="assignment_notes_' + index + '" rows="2">' + escapeHtml(String(v.notes || '')) + '</textarea></label>'
@@ -924,7 +999,7 @@ function buildAdminHtml_(opts) {
       while (formData.has('assignment_jobNumber_' + index) || formData.has('assignment_startTime_' + index) || formData.has('assignment_startLocation_' + index)) {
         assignments.push({
           jobNumber: String(formData.get('assignment_jobNumber_' + index) || '').trim(),
-          startTime: String(formData.get('assignment_startTime_' + index) || '').trim(),
+          startTime: normalizeTimeInput(String(formData.get('assignment_startTime_' + index) || '').trim()),
           startLocation: String(formData.get('assignment_startLocation_' + index) || '').trim(),
           instructions: String(formData.get('assignment_instructions_' + index) || '').trim(),
           notes: String(formData.get('assignment_notes_' + index) || '').trim()
@@ -952,7 +1027,14 @@ function buildAdminHtml_(opts) {
       const form = event.target;
       const submitMode = String(window.__submitMode || 'dashboard').trim();
       const formData = new FormData(form);
-      const assignments = collectAssignments(formData);
+      var assignments;
+      try {
+        assignments = collectAssignments(formData);
+      } catch (error) {
+        showBanner('error', error && error.message ? error.message : String(error || 'Invalid start time'));
+        window.__submitMode = null;
+        return;
+      }
       const payload = {
         status: String(formData.get('status') || '').trim(),
         date: String(formData.get('date') || '').trim(),
