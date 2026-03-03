@@ -1022,6 +1022,16 @@ function buildAdminHtml_(opts) {
       addAssignmentBlock();
     }
 
+    function redirectToDashboardAfterSuccess() {
+      const url = BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok';
+      appendClientLog('[nav] to dashboard ' + url);
+      try {
+        top.location.href = url;
+      } catch (e) {
+        window.open(url, '_top');
+      }
+    }
+
     function submitCreateDispatch(event) {
       event.preventDefault();
       const form = event.target;
@@ -1073,7 +1083,7 @@ function buildAdminHtml_(opts) {
         google.script.run
           .withSuccessHandler(function () {
             showBanner('success', 'Created.');
-            window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=edit_ok', '_top');
+            redirectToDashboardAfterSuccess();
             window.__submitMode = null;
           })
           .withFailureHandler(function (error) {
@@ -1090,7 +1100,7 @@ function buildAdminHtml_(opts) {
       google.script.run
         .withSuccessHandler(function () {
           if (submitMode === 'dashboard') {
-            window.open(BASE_URL + '?t=' + encodeURIComponent(TOKEN) + '&p=dashboard&msg=create_ok', '_top');
+            redirectToDashboardAfterSuccess();
             window.__submitMode = null;
             return;
           }
