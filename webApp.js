@@ -55,6 +55,22 @@ function formatTimeNY_(value) {
   return Utilities.formatDate(parsed, NY_TIMEZONE, 'hh:mm a');
 }
 
+function isValidDocUrl_(value) {
+  const trimmed = String(value || '').trim();
+  return /^https:\/\/docs\.google\.com\/document\/d\//i.test(trimmed)
+    || /^https:\/\//i.test(trimmed);
+}
+
+function isValidDocId_(value) {
+  return /^[A-Za-z0-9_-]{21,}$/.test(String(value || '').trim());
+}
+
+function resolveDocUrl_(docUrl, docId) {
+  if (isValidDocUrl_(docUrl)) return docUrl;
+  if (isValidDocId_(docId)) return 'https://docs.google.com/document/d/' + docId + '/edit';
+  return '';
+}
+
 /**
  * Handle a web request and return the matching scoped dispatch page.
  *
@@ -1515,6 +1531,8 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
     const jobNumber = String(row[headerMap.job_number] || '').trim();
     const status = String(row[headerMap.status] || '').trim();
     const docUrl = String(row[headerMap.doc_url] || '').trim();
+    const docId = headerMap.doc_id === undefined ? '' : String(row[headerMap.doc_id] || '').trim();
+    const resolvedDocUrl = String(resolveDocUrl_(docUrl, docId) || '').trim();
     const rawIsConfirmed = row[headerMap.is_confirmed];
     const isConfirmed = rawIsConfirmed === true
       || String(rawIsConfirmed || '').toLowerCase() === 'true';
@@ -1529,8 +1547,8 @@ function buildTruckScopedPortalHtml_(truckNumber, token) {
       : showConfirmButton
         ? `<button type="button" class="confirmBtn" data-dispatch-id="${dispatchId}">Confirm receipt</button>`
         : '<button type="button" class="confirmBtn" disabled>Confirmed ✓</button>';
-    const viewButton = isValidDocUrl(docUrl)
-      ? `<a class="viewBtn" href="${docUrl}" target="_blank" rel="noopener">View</a>`
+    const viewButton = isValidDocUrl_(resolvedDocUrl)
+      ? `<a class="viewBtn" href="${resolvedDocUrl}" target="_blank" rel="noopener">View</a>`
       : '<button type="button" class="viewBtn" disabled>No doc</button>';
 
     const block = '<div class="dispatch-block">'
