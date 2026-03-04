@@ -403,6 +403,9 @@ function buildAdminHtml_(opts) {
         <label>Client
           <input type="text" name="client">
         </label>
+        <label>Start Time
+          <input id="startTime" name="startTime" type="time" step="60">
+        </label>
         <div id="assignmentBlocks"></div>
         <button type="button" onclick="addAssignmentBlock()">Add Assignment</button>
         <label>Truck Numbers (comma-separated)
@@ -976,6 +979,9 @@ function buildAdminHtml_(opts) {
       form.elements.date.value = payload.date || '';
       form.elements.shift.value = payload.shift || '';
       form.elements.client.value = payload.client || '';
+      if (form.elements.startTime) {
+        form.elements.startTime.value = standardizedTime12ToTimeInput(payload.start_time || payload.startTime || '');
+      }
       form.elements.truckNumbers.value = payload.truck_numbers || '';
       form.elements.tollsPolicy.value = payload.tolls_policy || '';
       form.elements.notes.value = payload.notes || '';
@@ -1046,13 +1052,28 @@ function buildAdminHtml_(opts) {
         window.__submitMode = null;
         return;
       }
+      const rawStartTime = String(formData.get('startTime') || '').trim();
+      appendClientLog('[create] rawStartTime=' + JSON.stringify(rawStartTime));
+      if (!rawStartTime) {
+        showBanner('error', 'Start Time is required.');
+        window.__submitMode = null;
+        return;
+      }
+      let normalizedStartTime = '';
+      try {
+        normalizedStartTime = normalizeTimeInput(rawStartTime);
+      } catch (error) {
+        showBanner('error', error && error.message ? error.message : String(error || 'Invalid start time'));
+        window.__submitMode = null;
+        return;
+      }
       const payload = {
         status: String(formData.get('status') || '').trim(),
         date: String(formData.get('date') || '').trim(),
         shift: String(formData.get('shift') || '').trim(),
         client: String(formData.get('client') || '').trim(),
         jobNumber: String((assignments[0] && assignments[0].jobNumber) || '').trim(),
-        startTime: String((assignments[0] && assignments[0].startTime) || '').trim(),
+        startTime: normalizedStartTime,
         startLocation: String((assignments[0] && assignments[0].startLocation) || '').trim(),
         instructions: String((assignments[0] && assignments[0].instructions) || '').trim(),
         notes: String(formData.get('notes') || '').trim(),
