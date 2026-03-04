@@ -115,15 +115,7 @@ function normalizeTimeInput_(value) {
   if (!text) return '';
   const compact = text.toUpperCase().replace(/\./g, '').replace(/\s+/g, '');
 
-  let match = compact.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
-  if (match) {
-    const hour12 = Number(match[1]);
-    const minute12 = Number(match[2]);
-    if (hour12 < 1 || hour12 > 12 || minute12 < 0 || minute12 > 59) throw new Error('Time must be valid.');
-    return `${String(hour12).padStart(2, '0')}:${String(minute12).padStart(2, '0')} ${match[3]}`;
-  }
-
-  match = compact.match(/^(\d{1,2}):(\d{2})$/);
+  let match = compact.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
   if (match) {
     const hour24 = Number(match[1]);
     const minute24 = Number(match[2]);
@@ -131,6 +123,14 @@ function normalizeTimeInput_(value) {
     const suffix24 = hour24 >= 12 ? 'PM' : 'AM';
     const hour12From24 = hour24 % 12 || 12;
     return `${String(hour12From24).padStart(2, '0')}:${String(minute24).padStart(2, '0')} ${suffix24}`;
+  }
+
+  match = compact.match(/^(\d{1,2}):(\d{2})(AM|PM)$/);
+  if (match) {
+    const hour12 = Number(match[1]);
+    const minute12 = Number(match[2]);
+    if (hour12 < 1 || hour12 > 12 || minute12 < 0 || minute12 > 59) throw new Error('Time must be valid.');
+    return `${String(hour12).padStart(2, '0')}:${String(minute12).padStart(2, '0')} ${match[3]}`;
   }
 
   match = compact.match(/^(\d{1,2})(AM|PM)$/);
